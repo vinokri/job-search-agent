@@ -440,6 +440,21 @@ class JobSearchOrchestrator:
     def run_search(self, job_titles: list[str] | None, companies: list[str] | None, limit: int = 25) -> dict:
         return self.search_agent.run(job_titles, companies, limit)
 
+    def clear_run_state(self) -> None:
+        dump_json(self.store.paths.shortlist, [])
+        self.store.paths.shortlist_markdown.write_text("", encoding="utf-8")
+        self.store.save_queue([])
+        self.store.save_approved([])
+        runtime = self.store.load_runtime()
+        runtime["jobs"] = {}
+        runtime["last_search"] = {}
+        self.store.save_runtime(runtime)
+        self.store.append_memory(
+            "system",
+            "clear-run-state",
+            "Cleared shortlist, queue, approved jobs, and last search state.",
+        )
+
     def refresh_resume_source(self, resume_path: str) -> dict:
         profile = load_json(self.store.paths.profile)
         profile["candidate"]["resume_path"] = resume_path

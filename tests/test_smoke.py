@@ -451,6 +451,65 @@ MS Computer Science
             self.assertIn("google_apply_playwright.py", launched[0][0][1])
             self.assertEqual(posted_events[0][2], "launched")
 
+    def test_clear_run_state_via_ui(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            paths = self.make_paths(tmp)
+            paths.profile.write_text((ROOT / "data/profile.json").read_text(encoding="utf-8"), encoding="utf-8")
+            paths.sample_jobs.write_text((ROOT / "data/jobs.sample.json").read_text(encoding="utf-8"), encoding="utf-8")
+            orchestrator = JobSearchOrchestrator(WorkflowStore(paths))
+
+            with patch(
+                "job_agent.orchestration.collect_live_jobs_with_diagnostics",
+                return_value=(
+                    [],
+                    {
+                        "Google": {
+                            "status": "ok",
+                            "jobs_collected": 0,
+                            "requested_titles": ["software engineer"],
+                            "response_type": "html",
+                            "top_level_keys": [],
+                            "response_preview": "empty",
+                            "sample_titles": [],
+                        }
+                    },
+                ),
+            ):
+                orchestrator.run_search(["software engineer"], ["Google"], 10)
+
+            statuses = []
+
+            def start_response(status, headers):  # noqa: ANN001,ANN202
+                statuses.append((status, headers))
+
+            with patch.object(web, "build_orchestrator", return_value=orchestrator), patch.object(
+                web, "DEFAULT_QUEUE", paths.queue
+            ), patch.object(web, "DEFAULT_SHORTLIST", paths.shortlist), patch.object(
+                web, "DEFAULT_APPROVED", paths.approved
+            ), patch.object(
+                web, "DEFAULT_RUNTIME", paths.runtime
+            ), patch.object(
+                web, "DEFAULT_MEMORY", paths.memory
+            ):
+                body = b""
+                application(
+                    {
+                        "REQUEST_METHOD": "POST",
+                        "PATH_INFO": "/clear-run-state",
+                        "CONTENT_LENGTH": str(len(body)),
+                        "QUERY_STRING": "",
+                        "wsgi.input": BytesIO(body),
+                    },
+                    start_response,
+                )
+
+            self.assertEqual(statuses[0][0], "303 See Other")
+            self.assertEqual(json.loads(paths.shortlist.read_text(encoding="utf-8")), [])
+            self.assertEqual(json.loads(paths.queue.read_text(encoding="utf-8")), [])
+            runtime = json.loads(paths.runtime.read_text(encoding="utf-8"))
+            self.assertEqual(runtime.get("jobs"), {})
+
     def test_collect_live_jobs_command_invokes_collector(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             out_path = Path(tmpdir) / "live.json"

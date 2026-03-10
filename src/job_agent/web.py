@@ -458,6 +458,11 @@ def render_home(message: str = "") -> bytes:
             <button type="submit">Run search</button>
           </div>
         </form>
+        <form method="post" action="/clear-run-state">
+          <div class="actions">
+            <button type="submit" class="warning">Clear previous run</button>
+          </div>
+        </form>
       </div>
       <div class="panel">
         <h2>Shortlist</h2>
@@ -775,6 +780,11 @@ def handle_export_approved() -> str:
     return "Approved jobs exported."
 
 
+def handle_clear_run_state() -> str:
+    build_orchestrator().clear_run_state()
+    return "Previous shortlist and queue state cleared."
+
+
 def handle_runner_event(payload: dict) -> dict:
     run_id = str(payload.get("run_id", "")).strip()
     event = str(payload.get("event", "")).strip()
@@ -836,13 +846,15 @@ def application(environ, start_response):
             start_response("400 Bad Request", [("Content-Type", "application/json; charset=utf-8")])
             return [body]
 
-    if method == "POST" and path in {"/resume-source", "/run-search", "/approve-job", "/approve-resume", "/apply-job", "/mark-submitted", "/export-approved"}:
+    if method == "POST" and path in {"/resume-source", "/run-search", "/clear-run-state", "/approve-job", "/approve-resume", "/apply-job", "/mark-submitted", "/export-approved"}:
         form = parse_request_form(environ)
         try:
             if path == "/resume-source":
                 message = handle_resume_source(form)
             elif path == "/run-search":
                 message = handle_run_search(form)
+            elif path == "/clear-run-state":
+                message = handle_clear_run_state()
             elif path == "/approve-job":
                 message = handle_approve_job(form)
             elif path == "/approve-resume":
