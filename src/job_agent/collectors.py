@@ -143,8 +143,26 @@ def title_matches(job_title: str, requested_titles: list[str] | None) -> bool:
     return any(title.lower() in lowered for title in requested_titles)
 
 
+def preview_text(value: str, limit: int = 280) -> str:
+    return normalize_whitespace(value)[:limit]
+
+
 def collect_nvidia_jobs(job_titles: list[str] | None, limit: int = 20) -> list[dict]:
+    jobs, _ = collect_nvidia_jobs_with_diagnostics(job_titles, limit)
+    return jobs
+
+
+def collect_nvidia_jobs_with_diagnostics(job_titles: list[str] | None, limit: int = 20) -> tuple[list[dict], dict]:
     collected: list[dict] = []
+    diagnostics = {
+        "status": "ok",
+        "jobs_collected": 0,
+        "requested_titles": job_titles or [],
+        "response_type": "unknown",
+        "top_level_keys": [],
+        "response_preview": "",
+        "sample_titles": [],
+    }
     search_texts = job_titles or [""]
     for search_text in search_texts:
         payload = json.dumps(
@@ -162,9 +180,23 @@ def collect_nvidia_jobs(job_titles: list[str] | None, limit: int = 20) -> list[d
                 data=payload,
                 content_type="application/json",
             )
-        except (HTTPError, URLError):
+        except (HTTPError, URLError) as exc:
+            diagnostics["status"] = "error"
+            diagnostics["error"] = str(exc)
             continue
-        parsed = json.loads(response)
+        diagnostics["response_preview"] = preview_text(response)
+        try:
+            parsed = json.loads(response)
+        except json.JSONDecodeError:
+            diagnostics["response_type"] = "non-json"
+            continue
+        diagnostics["response_type"] = "json"
+        diagnostics["top_level_keys"] = sorted(parsed.keys()) if isinstance(parsed, dict) else []
+        diagnostics["sample_titles"] = [
+            normalize_whitespace(str(item.get("title", "")))
+            for item in parsed.get("jobPostings", [])[:5]
+            if isinstance(item, dict)
+        ]
         for posting in parsed.get("jobPostings", []):
             title = normalize_whitespace(str(posting.get("title", "")))
             if not title_matches(title, job_titles):
@@ -197,7 +229,9 @@ def collect_nvidia_jobs(job_titles: list[str] | None, limit: int = 20) -> list[d
                     "skills": extract_skills_from_text(" ".join([title, description])),
                 }
             )
-    return unique_jobs(collected)[:limit]
+    unique = unique_jobs(collected)[:limit]
+    diagnostics["jobs_collected"] = len(unique)
+    return unique, diagnostics
 
 
 def extract_google_results(html: str) -> list[dict]:
@@ -252,7 +286,21 @@ def extract_google_results(html: str) -> list[dict]:
 
 
 def collect_google_jobs(job_titles: list[str] | None, limit: int = 20) -> list[dict]:
+    jobs, _ = collect_google_jobs_with_diagnostics(job_titles, limit)
+    return jobs
+
+
+def collect_google_jobs_with_diagnostics(job_titles: list[str] | None, limit: int = 20) -> tuple[list[dict], dict]:
     collected: list[dict] = []
+    diagnostics = {
+        "status": "ok",
+        "jobs_collected": 0,
+        "requested_titles": job_titles or [],
+        "response_type": "html",
+        "top_level_keys": [],
+        "response_preview": "",
+        "sample_titles": [],
+    }
     queries = job_titles or [""]
     for query in queries:
         url = GOOGLE_RESULTS
@@ -260,14 +308,22 @@ def collect_google_jobs(job_titles: list[str] | None, limit: int = 20) -> list[d
             url = f"{GOOGLE_RESULTS}/?q={quote_plus(query)}"
         try:
             html = fetch_url(url)
-        except (HTTPError, URLError):
+        except (HTTPError, URLError) as exc:
+            diagnostics["status"] = "error"
+            diagnostics["error"] = str(exc)
             continue
-        for item in extract_google_results(html):
+        diagnostics["response_preview"] = preview_text(re.sub(r"<[^>]+>", " ", html))
+        parsed_items = extract_google_results(html)
+        diagnostics["sample_titles"] = [item["title"] for item in parsed_items[:5]]
+        for item in parsed_items:
             collected.append(item)
     filtered = [item for item in unique_jobs(collected) if title_matches(item["title"], job_titles)]
     if filtered:
-        return filtered[:limit]
-    return unique_jobs(collected)[:limit]
+        diagnostics["jobs_collected"] = len(filtered[:limit])
+        return filtered[:limit], diagnostics
+    unique = unique_jobs(collected)[:limit]
+    diagnostics["jobs_collected"] = len(unique)
+    return unique, diagnostics
 
 
 def extract_sitemap_urls(xml_text: str, contains: str | None = None) -> list[str]:
@@ -412,12 +468,12 @@ def collect_live_jobs_with_diagnostics(
 
     def run_collector(label: str, fn) -> None:
         try:
-            collected = fn(job_titles, limit_per_company)
+            collected, collector_diagnostics = fn(job_titles, limit_per_company)
             jobs.extend(collected)
             diagnostics[label] = {
-                "status": "ok",
+                **collector_diagnostics,
+                "status": collector_diagnostics.get("status", "ok"),
                 "jobs_collected": len(collected),
-                "requested_titles": job_titles or [],
             }
         except Exception as exc:  # noqa: BLE001
             diagnostics[label] = {
@@ -428,9 +484,9 @@ def collect_live_jobs_with_diagnostics(
             }
 
     if "nvidia" in requested:
-        run_collector("NVIDIA", collect_nvidia_jobs)
+        run_collector("NVIDIA", collect_nvidia_jobs_with_diagnostics)
     if "google" in requested:
-        run_collector("Google", collect_google_jobs)
+        run_collector("Google", collect_google_jobs_with_diagnostics)
     if "databricks" in requested:
         run_collector("Databricks", collect_databricks_jobs)
     if "snowflake" in requested:

@@ -182,7 +182,20 @@ MS Computer Science
 
             with patch(
                 "job_agent.orchestration.collect_live_jobs_with_diagnostics",
-                return_value=([], {"Snowflake": {"status": "ok", "jobs_collected": 0, "requested_titles": ["data engineer"]}}),
+                return_value=(
+                    [],
+                    {
+                        "Snowflake": {
+                            "status": "ok",
+                            "jobs_collected": 0,
+                            "requested_titles": ["data engineer"],
+                            "response_type": "html",
+                            "top_level_keys": [],
+                            "response_preview": "empty",
+                            "sample_titles": [],
+                        }
+                    },
+                ),
             ):
                 result = orchestrator.run_search(["data engineer"], ["Snowflake"], 10)
             self.assertIn("diagnostics", result)
@@ -243,6 +256,10 @@ MS Computer Science
                             "status": "ok",
                             "jobs_collected": len(live_jobs),
                             "requested_titles": job_titles or [],
+                            "response_type": "html",
+                            "top_level_keys": [],
+                            "response_preview": "preview",
+                            "sample_titles": ["Data Engineer"],
                         }
                     },
                 )

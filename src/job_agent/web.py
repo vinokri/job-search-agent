@@ -527,11 +527,15 @@ def render_memory_row(item: dict) -> str:
 
 def render_diagnostic_row(name: str, item: dict) -> str:
     error_text = f" · Error: {item.get('error', '')}" if item.get("error") else ""
+    sample_titles = ", ".join(item.get("sample_titles", []))
     return f"""
 <article class="job-card">
   <h3>{html_escape(name)}</h3>
   <p class="muted">Status: {html_escape(str(item.get("status", "unknown")))} · Jobs collected: {html_escape(str(item.get("jobs_collected", 0)))}</p>
+  <p class="muted">Response type: {html_escape(str(item.get("response_type", "unknown")))} · Keys: {html_escape(', '.join(item.get("top_level_keys", [])) or 'none')}</p>
   <p class="muted">Requested titles: {html_escape(', '.join(item.get('requested_titles', [])) or 'none')}</p>
+  <p class="muted">Sample titles: {html_escape(sample_titles or 'none')}</p>
+  <p class="muted">Preview: {html_escape(item.get("response_preview", "") or 'none')}</p>
   <p class="muted">{html_escape(error_text or 'No collector error reported.')}</p>
 </article>
 """
