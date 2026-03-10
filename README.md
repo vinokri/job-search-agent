@@ -104,6 +104,20 @@ This means:
 - external browser assistance is prepared as a local bundle
 - final submission is still a human decision
 
+## Local companion runner
+
+To make the hosted app feel like a single-click browser workflow, run the local companion runner on your machine.
+
+The local runner:
+
+- polls the deployed app for pending browser-apply bundles
+- downloads the newest bundle automatically
+- extracts it locally
+- launches the Playwright script on your machine
+- reports launch success or failure back to the app
+
+This is the correct architecture because a hosted container cannot open a visible browser on your laptop.
+
 ## Project structure
 
 ```text
@@ -238,6 +252,33 @@ PYTHONPATH=src python3 -m job_agent mark-submitted --job-id google-001
 
 Use this only after you complete the final ATS submit in the browser.
 
+### 7. Run the local companion runner
+
+CLI:
+
+```bash
+PYTHONPATH=src python3 -m job_agent run-local-runner \
+  --base-url https://your-render-app.onrender.com
+```
+
+One-shot mode:
+
+```bash
+PYTHONPATH=src python3 -m job_agent run-local-runner \
+  --base-url https://your-render-app.onrender.com \
+  --once
+```
+
+When the runner is active:
+
+1. click `Apply In Browser` in the hosted app
+2. the hosted app prepares the bundle
+3. the local runner polls `/api/pending-apply-runs`
+4. it downloads and extracts the bundle automatically
+5. it launches the local Playwright script
+6. your browser opens the ATS page automatically
+7. after final submit, click `Mark Submitted` in the app
+
 ## UI flow
 
 Fastest local start:
@@ -277,6 +318,7 @@ PYTHONPATH=src python3 -m job_agent approve-job --job-id google-001
 PYTHONPATH=src python3 -m job_agent approve-resume --job-id google-001
 PYTHONPATH=src python3 -m job_agent apply-job --job-id google-001
 PYTHONPATH=src python3 -m job_agent mark-submitted --job-id google-001
+PYTHONPATH=src python3 -m job_agent run-local-runner --base-url https://your-render-app.onrender.com
 PYTHONPATH=src python3 -m job_agent serve-ui --host 127.0.0.1 --port 8000
 ```
 
@@ -313,6 +355,7 @@ PYTHONPATH=src python3 -m unittest discover -s tests
 
 - Live collector parsing remains best-effort because career sites change frequently.
 - Google and NVIDIA are currently wired into the browser apply architecture.
+- The local companion runner is required if you want the browser to open automatically from a hosted deployment.
 - DOCX and PDF generation depend on tools available in the host runtime.
 - PDF source parsing is still fallback-grade compared with native DOCX parsing.
 - Hosted containers use ephemeral storage unless you add persistence.

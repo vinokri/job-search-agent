@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import html
+import json
 import os
 from pathlib import Path
 from urllib.parse import parse_qs, quote_plus, unquote_plus
@@ -586,6 +587,34 @@ def render_diagnostic_row(name: str, item: dict) -> str:
 """
 
 
+def build_pending_apply_runs_payload(environ) -> list[dict]:
+    queue = load_json_if_present(DEFAULT_QUEUE)
+    scheme = environ.get("wsgi.url_scheme", "http")
+    host = environ.get("HTTP_HOST") or "127.0.0.1:8000"
+    base_url = f"{scheme}://{host}"
+    pending: list[dict] = []
+    for item in queue:
+        if item.get("apply_status") != "bundle_ready":
+            continue
+        bundle_path = item.get("apply_bundle_path", "")
+        if not bundle_path:
+            continue
+        pending.append(
+            {
+                "job_id": item.get("id", ""),
+                "title": item.get("title", ""),
+                "company": item.get("company", ""),
+                "apply_provider": item.get("apply_provider", ""),
+                "application_run_path": item.get("application_run_path", ""),
+                "application_packet_path": item.get("application_packet_path", ""),
+                "bundle_url": f"{base_url}{artifact_href(bundle_path)}",
+                "job_url": item.get("url", ""),
+                "local_launch_command": item.get("apply_launch_command", ""),
+            }
+        )
+    return pending
+
+
 def parse_multipart(body: bytes, content_type: str) -> dict[str, list[object]]:
     boundary_match = None
     for part in content_type.split(";"):
@@ -706,6 +735,17 @@ def handle_export_approved() -> str:
     return "Approved jobs exported."
 
 
+def handle_runner_event(payload: dict) -> dict:
+    run_id = str(payload.get("run_id", "")).strip()
+    event = str(payload.get("event", "")).strip()
+    details = payload.get("payload", {})
+    if not run_id or not event:
+        raise ValueError("run_id and event are required.")
+    orchestrator = build_orchestrator()
+    run = orchestrator.apply_agent.runner_event(run_id, event, details if isinstance(details, dict) else {})
+    return {"ok": True, "run_id": run_id, "event": event, "status": run.get("status", "")}
+
+
 def application(environ, start_response):
     path = environ.get("PATH_INFO", "/")
     method = environ.get("REQUEST_METHOD", "GET").upper()
@@ -714,6 +754,11 @@ def application(environ, start_response):
     if method == "GET" and path == "/":
         body = render_home(message)
         start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
+        return [body]
+
+    if method == "GET" and path == "/api/pending-apply-runs":
+        body = json.dumps({"items": build_pending_apply_runs_payload(environ)}).encode("utf-8")
+        start_response("200 OK", [("Content-Type", "application/json; charset=utf-8")])
         return [body]
 
     if method == "GET" and path == "/artifact":
@@ -737,6 +782,19 @@ def application(environ, start_response):
             ],
         )
         return [resolved.read_bytes()]
+
+    if method == "POST" and path == "/api/runner-event":
+        try:
+            form = parse_request_form(environ)
+            raw = form.get("payload", ["{}"])[0] if isinstance(form, dict) else "{}"
+            payload = json.loads(raw) if isinstance(raw, str) else {}
+            body = json.dumps(handle_runner_event(payload)).encode("utf-8")
+            start_response("200 OK", [("Content-Type", "application/json; charset=utf-8")])
+            return [body]
+        except Exception as exc:  # noqa: BLE001
+            body = json.dumps({"ok": False, "error": str(exc)}).encode("utf-8")
+            start_response("400 Bad Request", [("Content-Type", "application/json; charset=utf-8")])
+            return [body]
 
     if method == "POST" and path in {"/resume-source", "/run-search", "/approve-job", "/approve-resume", "/apply-job", "/mark-submitted", "/export-approved"}:
         form = parse_request_form(environ)

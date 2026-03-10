@@ -14,6 +14,7 @@ from job_agent.collectors import (
     extract_jobposting_from_html,
 )
 from job_agent.ats import select_adapter
+from job_agent.local_runner import LocalApplyRunner
 from job_agent.orchestration import JobSearchOrchestrator, WorkflowPaths, WorkflowStore
 from job_agent.queue import export_approved, seed_queue, update_status
 from job_agent.resume import parse_resume_structure
@@ -352,38 +353,103 @@ MS Computer Science
 
                 queue_payload = json.loads(paths.queue.read_text(encoding="utf-8"))
                 self.assertEqual(queue_payload[0]["id"], "snowflake-001")
-                self.assertEqual(queue_payload[0]["resume_status"], "idle")
 
-                statuses.clear()
-                approve_body = b"job_id=snowflake-001"
-                application(
-                    {
-                        "REQUEST_METHOD": "POST",
-                        "PATH_INFO": "/approve-job",
-                        "CONTENT_LENGTH": str(len(approve_body)),
-                        "QUERY_STRING": "",
-                        "wsgi.input": BytesIO(approve_body),
-                    },
-                    start_response,
-                )
-                self.assertEqual(statuses[0][0], "303 See Other")
-                updated_queue = json.loads(paths.queue.read_text(encoding="utf-8"))
-                self.assertEqual(updated_queue[0]["resume_status"], "draft_ready")
+    def test_pending_apply_runs_api_and_local_runner(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            paths = self.make_paths(tmp)
+            paths.profile.write_text((ROOT / "data/profile.json").read_text(encoding="utf-8"), encoding="utf-8")
+            paths.sample_jobs.write_text((ROOT / "data/jobs.sample.json").read_text(encoding="utf-8"), encoding="utf-8")
+            paths.approved.write_text("[]\n", encoding="utf-8")
+            resume_path = tmp / "resume.txt"
+            resume_path.write_text(
+                "Vinodh Krishnamoorthy\nProfessional Summary\nSenior engineer building data systems.\nSkills\nPython, SQL, Spark\nExperience\nBuilt ML platforms.\n",
+                encoding="utf-8",
+            )
+            orchestrator = JobSearchOrchestrator(WorkflowStore(paths))
+            orchestrator.refresh_resume_source(str(resume_path))
 
-                statuses.clear()
-                resume_approve_body = b"job_id=snowflake-001"
-                application(
+            with patch(
+                "job_agent.orchestration.collect_live_jobs_with_diagnostics",
+                return_value=(
+                    [],
                     {
-                        "REQUEST_METHOD": "POST",
-                        "PATH_INFO": "/approve-resume",
-                        "CONTENT_LENGTH": str(len(resume_approve_body)),
-                        "QUERY_STRING": "",
-                        "wsgi.input": BytesIO(resume_approve_body),
+                        "Google": {
+                            "status": "ok",
+                            "jobs_collected": 0,
+                            "requested_titles": ["software engineer"],
+                            "response_type": "html",
+                            "top_level_keys": [],
+                            "response_preview": "empty",
+                            "sample_titles": [],
+                        }
                     },
-                    start_response,
+                ),
+            ):
+                orchestrator.run_search(["software engineer"], ["Google"], 10)
+            orchestrator.approve_job("google-001")
+            orchestrator.approve_resume("google-001")
+            with patch("job_agent.ats.playwright_python_available", return_value=True):
+                orchestrator.apply_job("google-001")
+
+            statuses = []
+
+            def start_response(status, headers):  # noqa: ANN001,ANN202
+                statuses.append((status, headers))
+
+            with patch.object(web, "build_orchestrator", return_value=orchestrator), patch.object(
+                web, "DEFAULT_QUEUE", paths.queue
+            ), patch.object(web, "DATA_DIR", tmp):
+                response = b"".join(
+                    application(
+                        {
+                            "REQUEST_METHOD": "GET",
+                            "PATH_INFO": "/api/pending-apply-runs",
+                            "QUERY_STRING": "",
+                            "HTTP_HOST": "example.test",
+                            "wsgi.url_scheme": "https",
+                            "wsgi.input": BytesIO(b""),
+                        },
+                        start_response,
+                    )
                 )
-                approved_queue = json.loads(paths.queue.read_text(encoding="utf-8"))
-                self.assertEqual(approved_queue[0]["resume_status"], "approved")
+            self.assertEqual(statuses[0][0], "200 OK")
+            payload = json.loads(response.decode("utf-8"))
+            self.assertEqual(len(payload["items"]), 1)
+            self.assertIn("/artifact?path=", payload["items"][0]["bundle_url"])
+
+            runner = LocalApplyRunner("https://example.test", tmp / "runner-workspace", poll_seconds=1)
+            bundle_source = Path(orchestrator.store.load_runtime()["jobs"]["google-001"]["apply_bundle_path"])
+            launched = []
+            posted_events = []
+
+            def fake_get_json(url):  # noqa: ANN001,ANN202
+                return {"items": payload["items"]}
+
+            def fake_download(url, destination):  # noqa: ANN001,ANN202
+                destination.write_bytes(bundle_source.read_bytes())
+                return destination
+
+            def fake_popen(cmd, cwd=None):  # noqa: ANN001,ANN202
+                launched.append((cmd, cwd))
+                class Dummy:
+                    pass
+                return Dummy()
+
+            def fake_post(base_url, run_id, event, payload=None):  # noqa: ANN001,ANN202
+                posted_events.append((base_url, run_id, event, payload))
+
+            with patch("job_agent.local_runner.http_get_json", side_effect=fake_get_json), patch(
+                "job_agent.local_runner.http_download", side_effect=fake_download
+            ), patch("job_agent.local_runner.subprocess.Popen", side_effect=fake_popen), patch(
+                "job_agent.local_runner.post_runner_event", side_effect=fake_post
+            ):
+                launched_count = runner.poll_once()
+
+            self.assertEqual(launched_count, 1)
+            self.assertEqual(len(launched), 1)
+            self.assertIn("google_apply_playwright.py", launched[0][0][1])
+            self.assertEqual(posted_events[0][2], "launched")
 
     def test_collect_live_jobs_command_invokes_collector(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

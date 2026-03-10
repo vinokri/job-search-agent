@@ -384,6 +384,37 @@ class ApplyJobAgent:
         )
         return job
 
+    def runner_event(self, run_id: str, event: str, payload: dict | None = None) -> dict:
+        runtime = self.store.load_runtime()
+        jobs = runtime.get("jobs", {})
+        target_job: dict | None = None
+        target_job_id = ""
+        for job_id, job in jobs.items():
+            if job.get("application_run_id") == run_id:
+                target_job = job
+                target_job_id = job_id
+                break
+        if target_job is None:
+            raise ValueError(f"Application run '{run_id}' not found.")
+
+        run = self.run_store.append_event(run_id, event, f"Runner reported {event}.", payload)
+        if event == "launched":
+            target_job["apply_status"] = "local_browser_started"
+        elif event == "launch_failed":
+            target_job["apply_status"] = "launch_failed"
+        target_job["last_agent"] = self.name
+        target_job["updated_at"] = utc_now()
+        self.store.save_runtime(runtime)
+        self._sync_queue(target_job_id, target_job)
+        self.store.append_memory(
+            self.name,
+            f"runner-{event}",
+            f"Local runner reported {event} for {target_job['title']}.",
+            job_id=target_job_id,
+            payload=payload or {},
+        )
+        return run
+
     def _sync_queue(self, job_id: str, job: dict) -> None:
         queue = self.store.load_queue()
         for item in queue:

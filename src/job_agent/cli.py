@@ -4,6 +4,7 @@ import argparse
 from pathlib import Path
 
 from .collectors import collect_live_jobs
+from .local_runner import LocalApplyRunner
 from .orchestration import JobSearchOrchestrator, WorkflowStore, build_default_paths
 from .queue import export_approved, seed_queue, update_status
 from .shortlist import build_shortlist
@@ -141,6 +142,15 @@ def build_parser() -> argparse.ArgumentParser:
     serve_parser.add_argument("--host", default="127.0.0.1")
     serve_parser.add_argument("--port", type=int, default=8000)
 
+    runner_parser = subparsers.add_parser(
+        "run-local-runner",
+        help="Poll a deployed app for browser-apply bundles and launch them locally.",
+    )
+    runner_parser.add_argument("--base-url", required=True)
+    runner_parser.add_argument("--workspace", default=str(Path.home() / ".job-search-agent-runner"))
+    runner_parser.add_argument("--poll-seconds", type=int, default=20)
+    runner_parser.add_argument("--once", action="store_true")
+
     return parser
 
 
@@ -209,6 +219,13 @@ def main() -> None:
         return
     if args.command == "serve-ui":
         serve_ui(args.host, args.port)
+        return
+    if args.command == "run-local-runner":
+        runner = LocalApplyRunner(args.base_url, args.workspace, args.poll_seconds)
+        if args.once:
+            runner.poll_once()
+        else:
+            runner.run_forever()
         return
 
 
