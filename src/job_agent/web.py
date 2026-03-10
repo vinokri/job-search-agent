@@ -530,19 +530,30 @@ def render_queue_card(item: dict) -> str:
     pdf_link = artifact_href(rendered_pdf)
     bundle_link = artifact_href(bundle_path)
     packet_link = artifact_href(packet_path)
+    next_step = ""
+    if resume != "approved":
+        next_step = "Approve the tailored resume after reviewing the draft."
+    elif apply == "bundle_ready":
+        next_step = "Download the apply bundle, run the local script, then return here and mark the application submitted."
+    elif apply == "submitted":
+        next_step = "Application marked submitted."
+    else:
+        next_step = "Prepare the browser apply run when you are ready."
     return f"""
 <article class="job-card">
   <h3>{html_escape(item.get("title", ""))}</h3>
   <p><strong>{html_escape(item.get("company", ""))}</strong> · Score {item.get("score", 0)} · Review {status_badge(review)}</p>
   <p class="muted"><a href="{html_escape(item.get("url", ""))}" target="_blank" rel="noreferrer">Open job</a></p>
   <p class="muted"><a href="{html_escape(item.get("url", ""))}" target="_blank" rel="noreferrer">Open ATS page</a></p>
-  <p class="muted">Resume agent: {html_escape(resume)}{f" · Draft: {html_escape(resume_path)}" if resume_path else ""}</p>
-  <p class="muted">Rendered files: {html_escape(rendered_docx or 'no docx yet')} · {html_escape(rendered_pdf or 'no pdf yet')}</p>
+  <p class="muted">Resume agent: {html_escape(resume)}</p>
+  <p class="muted">Apply agent: {html_escape(apply)}</p>
+  <div style="margin: 12px 0; padding: 14px; border-radius: 14px; background: rgba(44,110,98,0.08); border: 1px solid rgba(44,110,98,0.18);">
+    <strong style="display:block; margin-bottom: 6px;">Next Step</strong>
+    <span class="muted">{html_escape(next_step)}</span>
+  </div>
   <p class="muted">{f'<a href="{html_escape(draft_link)}">Download resume draft</a>' if draft_link else 'Resume draft not generated yet.'}{f' · <a href="{html_escape(docx_link)}">Download DOCX</a>' if docx_link else ''}{f' · <a href="{html_escape(pdf_link)}">Download PDF</a>' if pdf_link else ''}</p>
-  <p class="muted">Apply agent: {html_escape(apply)}{f" · Packet: {html_escape(packet_path)}" if packet_path else ""}</p>
-  <p class="muted">Apply run: {html_escape(run_path or 'not prepared yet')}</p>
-  <p class="muted">Local launch: {html_escape(apply_command or 'Download the bundle and run it locally.')}</p>
   <p class="muted">{f'<a href="{html_escape(bundle_link)}">Download apply bundle</a>' if bundle_link else 'Apply bundle not prepared yet.'}{f' · <a href="{html_escape(packet_link)}">Download packet</a>' if packet_link else ''}</p>
+  <p class="muted">{html_escape(apply_command or 'Run the local script from the downloaded bundle.')}</p>
   {f'<pre class="muted" style="white-space: pre-wrap; overflow-x: auto; background: rgba(19,35,59,0.04); padding: 12px; border-radius: 12px;">{html_escape(preview)}</pre>' if preview else ''}
   <form class="inline-form" method="post" action="/approve-job">
     <input type="hidden" name="job_id" value="{job_id}">
@@ -551,14 +562,14 @@ def render_queue_card(item: dict) -> str:
   </form>
   <form class="inline-form" method="post" action="/approve-resume">
     <input type="hidden" name="job_id" value="{job_id}">
-    <input type="text" disabled value="{html_escape(item.get('resume_preview_path', 'no preview yet'))}">
+    <input type="text" disabled value="{html_escape('Review the downloaded draft, DOCX, or PDF above')}">
     <button type="submit" class="secondary">Approve Resume</button>
     <button type="button" class="warning" disabled>Resume {html_escape(resume)}</button>
-    <button type="button" disabled>{html_escape(item.get('selected_resume_path', ''))}</button>
+    <button type="button" disabled>{html_escape('Resume selected for apply flow')}</button>
   </form>
   <form class="inline-form" method="post" action="/apply-job">
     <input type="hidden" name="job_id" value="{job_id}">
-    <input type="text" disabled value="{html_escape(apply_command or 'Run locally after preparation')}">
+    <input type="text" disabled value="{html_escape('Prepare the local browser apply run')}">
     <button type="submit" class="secondary">Apply In Browser</button>
     <button type="button" class="warning" disabled>Resume {html_escape(resume)}</button>
     <button type="button" disabled>{html_escape(apply)}</button>
@@ -568,7 +579,7 @@ def render_queue_card(item: dict) -> str:
     <input type="text" disabled value="{html_escape(item.get('apply_provider', 'no adapter'))}">
     <button type="submit" class="secondary">Mark Submitted</button>
     <button type="button" class="warning" disabled>Review before submit</button>
-    <button type="button" disabled>{html_escape(run_path or '')}</button>
+    <button type="button" disabled>{html_escape('Confirm after external ATS submit')}</button>
   </form>
 </article>
 """
