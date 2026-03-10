@@ -499,6 +499,9 @@ def render_queue_card(item: dict) -> str:
     preview = ""
     if resume_path and Path(resume_path).exists():
         preview = "\n".join(Path(resume_path).read_text(encoding="utf-8").splitlines()[:8])
+    draft_link = artifact_href(resume_path)
+    docx_link = artifact_href(rendered_docx)
+    pdf_link = artifact_href(rendered_pdf)
     bundle_link = artifact_href(bundle_path)
     packet_link = artifact_href(packet_path)
     return f"""
@@ -508,6 +511,7 @@ def render_queue_card(item: dict) -> str:
   <p class="muted"><a href="{html_escape(item.get("url", ""))}" target="_blank" rel="noreferrer">Open job</a></p>
   <p class="muted">Resume agent: {html_escape(resume)}{f" · Draft: {html_escape(resume_path)}" if resume_path else ""}</p>
   <p class="muted">Rendered files: {html_escape(rendered_docx or 'no docx yet')} · {html_escape(rendered_pdf or 'no pdf yet')}</p>
+  <p class="muted">{f'<a href="{html_escape(draft_link)}">Download resume draft</a>' if draft_link else 'Resume draft not generated yet.'}{f' · <a href="{html_escape(docx_link)}">Download DOCX</a>' if docx_link else ''}{f' · <a href="{html_escape(pdf_link)}">Download PDF</a>' if pdf_link else ''}</p>
   <p class="muted">Apply agent: {html_escape(apply)}{f" · Packet: {html_escape(packet_path)}" if packet_path else ""}</p>
   <p class="muted">Apply run: {html_escape(run_path or 'not prepared yet')}</p>
   <p class="muted">Local launch: {html_escape(apply_command or 'Download the bundle and run it locally.')}</p>
