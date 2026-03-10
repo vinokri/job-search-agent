@@ -11,6 +11,7 @@ from job_agent.cli import main
 from job_agent.collectors import extract_google_results, extract_jobposting_from_html
 from job_agent.orchestration import JobSearchOrchestrator, WorkflowPaths, WorkflowStore
 from job_agent.queue import export_approved, seed_queue, update_status
+from job_agent.resume import parse_resume_structure
 from job_agent.shortlist import build_shortlist
 from job_agent import web
 from job_agent.web import application
@@ -31,6 +32,8 @@ class SmokeTest(unittest.TestCase):
             approved=tmp / "approved.json",
             runtime=tmp / "agent-runtime.json",
             memory=tmp / "agent-memory.json",
+            resume_structured=tmp / "resume-structured.json",
+            resume_sources=tmp / "source-resumes",
             resume_drafts=tmp / "resume-drafts",
             application_packets=tmp / "application-packets",
         )
@@ -69,6 +72,22 @@ class SmokeTest(unittest.TestCase):
         assert job is not None
         self.assertEqual(job["title"], "Staff Data Engineer")
         self.assertIn("python", job["skills"])
+
+    def test_parse_resume_structure(self) -> None:
+        text = """Vinodh Krishnamoorthy
+Professional Summary
+Senior engineer building data and ML platforms.
+Skills
+Python, SQL, Spark
+Experience
+Built distributed systems
+Education
+MS Computer Science
+"""
+        structured = parse_resume_structure(text)
+        self.assertEqual(structured["name"], "Vinodh Krishnamoorthy")
+        self.assertIn("skills", structured["sections"])
+        self.assertIn("python", structured["skills"])
 
     def test_shortlist_and_queue_flow(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -153,7 +172,13 @@ class SmokeTest(unittest.TestCase):
             paths = self.make_paths(tmp)
             paths.profile.write_text((ROOT / "data/profile.json").read_text(encoding="utf-8"), encoding="utf-8")
             paths.sample_jobs.write_text((ROOT / "data/jobs.sample.json").read_text(encoding="utf-8"), encoding="utf-8")
+            resume_path = tmp / "resume.txt"
+            resume_path.write_text(
+                "Vinodh Krishnamoorthy\nProfessional Summary\nSenior engineer building data systems.\nSkills\nPython, SQL, Spark\nExperience\nBuilt ML platforms.\n",
+                encoding="utf-8",
+            )
             orchestrator = JobSearchOrchestrator(WorkflowStore(paths))
+            orchestrator.refresh_resume_source(str(resume_path))
 
             with patch(
                 "job_agent.orchestration.collect_live_jobs",
@@ -162,8 +187,12 @@ class SmokeTest(unittest.TestCase):
                 orchestrator.run_search(["data engineer"], ["Snowflake"], 10)
 
             approved = orchestrator.approve_job("snowflake-001")
-            self.assertEqual(approved["resume_status"], "ready")
+            self.assertEqual(approved["resume_status"], "draft_ready")
             self.assertTrue(Path(approved["resume_draft_path"]).exists())
+            self.assertTrue(Path(approved["selected_resume_path"]).exists())
+
+            resume_approved = orchestrator.approve_resume("snowflake-001")
+            self.assertEqual(resume_approved["resume_status"], "approved")
 
             applied = orchestrator.apply_job("snowflake-001")
             self.assertEqual(applied["apply_status"], "sent")
@@ -176,6 +205,11 @@ class SmokeTest(unittest.TestCase):
             paths.profile.write_text((ROOT / "data/profile.json").read_text(encoding="utf-8"), encoding="utf-8")
             paths.sample_jobs.write_text((ROOT / "data/jobs.sample.json").read_text(encoding="utf-8"), encoding="utf-8")
             paths.approved.write_text("[]\n", encoding="utf-8")
+            resume_path = tmp / "resume.txt"
+            resume_path.write_text(
+                "Vinodh Krishnamoorthy\nProfessional Summary\nSenior engineer building data systems.\nSkills\nPython, SQL, Spark\nExperience\nBuilt ML platforms.\n",
+                encoding="utf-8",
+            )
 
             statuses = []
             live_jobs = [
@@ -197,6 +231,7 @@ class SmokeTest(unittest.TestCase):
                 statuses.append((status, headers))
 
             orchestrator = JobSearchOrchestrator(WorkflowStore(paths))
+            orchestrator.refresh_resume_source(str(resume_path))
 
             def fake_collect_live_jobs(out_path, job_titles, companies, limit_per_company):  # noqa: ANN001,ANN202
                 Path(out_path).write_text(json.dumps(live_jobs), encoding="utf-8")
@@ -254,7 +289,22 @@ class SmokeTest(unittest.TestCase):
                 )
                 self.assertEqual(statuses[0][0], "303 See Other")
                 updated_queue = json.loads(paths.queue.read_text(encoding="utf-8"))
-                self.assertEqual(updated_queue[0]["resume_status"], "ready")
+                self.assertEqual(updated_queue[0]["resume_status"], "draft_ready")
+
+                statuses.clear()
+                resume_approve_body = b"job_id=snowflake-001"
+                application(
+                    {
+                        "REQUEST_METHOD": "POST",
+                        "PATH_INFO": "/approve-resume",
+                        "CONTENT_LENGTH": str(len(resume_approve_body)),
+                        "QUERY_STRING": "",
+                        "wsgi.input": BytesIO(resume_approve_body),
+                    },
+                    start_response,
+                )
+                approved_queue = json.loads(paths.queue.read_text(encoding="utf-8"))
+                self.assertEqual(approved_queue[0]["resume_status"], "approved")
 
     def test_collect_live_jobs_command_invokes_collector(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -277,6 +327,16 @@ class SmokeTest(unittest.TestCase):
                     main()
 
             mocked.assert_called_once()
+
+    def test_parse_resume_source_command_invokes_orchestrator(self) -> None:
+        with patch("job_agent.cli.JobSearchOrchestrator") as orchestrator_cls:
+            instance = orchestrator_cls.return_value
+            with patch(
+                "sys.argv",
+                ["job_agent", "parse-resume-source", "--resume-path", "/tmp/resume.txt"],
+            ):
+                main()
+            instance.refresh_resume_source.assert_called_once_with("/tmp/resume.txt")
 
 
 if __name__ == "__main__":

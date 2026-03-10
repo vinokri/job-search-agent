@@ -5,6 +5,14 @@ from pathlib import Path
 
 from .collectors import collect_live_jobs
 from .models import dump_json, load_json, utc_now
+from .resume import (
+    build_tailored_resume_markdown,
+    extract_resume_text,
+    load_structured_resume,
+    parse_resume_structure,
+    save_structured_resume,
+    write_docx_if_possible,
+)
 from .shortlist import build_shortlist
 
 
@@ -19,6 +27,8 @@ class WorkflowPaths:
     approved: Path
     runtime: Path
     memory: Path
+    resume_structured: Path
+    resume_sources: Path
     resume_drafts: Path
     application_packets: Path
 
@@ -35,6 +45,8 @@ def build_default_paths(root: Path) -> WorkflowPaths:
         approved=data_dir / "approved-jobs.json",
         runtime=data_dir / "agent-runtime.json",
         memory=data_dir / "agent-memory.json",
+        resume_structured=data_dir / "resume-structured.json",
+        resume_sources=data_dir / "source-resumes",
         resume_drafts=data_dir / "resume-drafts",
         application_packets=data_dir / "application-packets",
     )
@@ -95,7 +107,9 @@ def default_job_state(item: dict) -> dict:
         "review_status": "pending",
         "resume_status": "idle",
         "apply_status": "idle",
+        "resume_preview_path": "",
         "resume_draft_path": "",
+        "selected_resume_path": "",
         "application_packet_path": "",
         "last_agent": "search",
         "updated_at": utc_now(),
@@ -201,37 +215,18 @@ class ResumeUpdateAgent:
             raise ValueError("Resume update agent only runs after approval.")
 
         profile = load_json(self.store.paths.profile)
+        structured_resume = load_structured_resume(self.store.paths.resume_structured)
         self.store.paths.resume_drafts.mkdir(parents=True, exist_ok=True)
         draft_path = self.store.paths.resume_drafts / f"{job_id}.md"
-        must_have = ", ".join(profile.get("skills", {}).get("must_have", [])) or "Add must-have skills"
-        strong = ", ".join(profile.get("skills", {}).get("strong", [])) or "Add strong skills"
-        draft = "\n".join(
-            [
-                f"# Resume Draft - {job['title']}",
-                "",
-                f"- Company: {job['company']}",
-                f"- Job URL: {job['url']}",
-                "",
-                "## Tailored Summary",
-                f"Target this resume toward {job['title']} responsibilities with emphasis on {must_have}.",
-                "",
-                "## Match Highlights",
-                *(f"- {reason}" for reason in job.get("reasons", [])[:8]),
-                "",
-                "## Skills To Emphasize",
-                f"- Must-have: {must_have}",
-                f"- Strong: {strong}",
-                "",
-                "## Manual Resume Edits",
-                "- Update headline and top summary to mirror the job title.",
-                "- Reorder bullets so the most relevant platform, data, and ML work appears first.",
-                "- Add exact metrics where available before submitting.",
-            ]
-        )
-        draft_path.write_text(draft + "\n", encoding="utf-8")
+        draft = build_tailored_resume_markdown(profile, structured_resume, job)
+        draft_path.write_text(draft, encoding="utf-8")
+        docx_path = self.store.paths.resume_drafts / f"{job_id}.docx"
+        generated_docx = write_docx_if_possible(draft, docx_path)
 
-        job["resume_status"] = "ready"
+        job["resume_status"] = "draft_ready"
+        job["resume_preview_path"] = str(draft_path)
         job["resume_draft_path"] = str(draft_path)
+        job["selected_resume_path"] = generated_docx or str(draft_path)
         job["last_agent"] = self.name
         job["updated_at"] = utc_now()
         self.store.save_runtime(runtime)
@@ -241,7 +236,10 @@ class ResumeUpdateAgent:
             "prepare-resume",
             f"Prepared resume draft for {job['title']}.",
             job_id=job_id,
-            payload={"resume_draft_path": str(draft_path)},
+            payload={
+                "resume_draft_path": str(draft_path),
+                "selected_resume_path": job["selected_resume_path"],
+            },
         )
         return job
 
@@ -250,7 +248,9 @@ class ResumeUpdateAgent:
         for item in queue:
             if item["id"] == job_id:
                 item["resume_status"] = job["resume_status"]
+                item["resume_preview_path"] = job["resume_preview_path"]
                 item["resume_draft_path"] = job["resume_draft_path"]
+                item["selected_resume_path"] = job["selected_resume_path"]
                 item["last_agent"] = job["last_agent"]
         self.store.save_queue(queue)
 
@@ -269,8 +269,8 @@ class ApplyJobAgent:
         job = jobs[job_id]
         if job["review_status"] != "approved":
             raise ValueError("Approve the job before applying.")
-        if job["resume_status"] != "ready":
-            raise ValueError("Resume update agent must finish before apply.")
+        if job["resume_status"] != "approved":
+            raise ValueError("Resume must be approved before apply.")
 
         self.store.paths.application_packets.mkdir(parents=True, exist_ok=True)
         packet_path = self.store.paths.application_packets / f"{job_id}.json"
@@ -279,7 +279,8 @@ class ApplyJobAgent:
             "company": job["company"],
             "title": job["title"],
             "url": job["url"],
-            "resume_draft_path": job["resume_draft_path"],
+            "resume_file_path": job["selected_resume_path"],
+            "resume_preview_path": job["resume_preview_path"],
             "status": "sent",
             "sent_at": utc_now(),
         }
@@ -326,6 +327,21 @@ class JobSearchOrchestrator:
     def run_search(self, job_titles: list[str] | None, companies: list[str] | None, limit: int = 25) -> dict:
         return self.search_agent.run(job_titles, companies, limit)
 
+    def refresh_resume_source(self, resume_path: str) -> dict:
+        profile = load_json(self.store.paths.profile)
+        profile["candidate"]["resume_path"] = resume_path
+        dump_json(self.store.paths.profile, profile)
+        text = extract_resume_text(resume_path)
+        structured = parse_resume_structure(text)
+        save_structured_resume(self.store.paths.resume_structured, structured)
+        self.store.append_memory(
+            "resume-source",
+            "parse",
+            "Parsed source resume into structured content.",
+            payload={"resume_path": resume_path},
+        )
+        return structured
+
     def approve_job(self, job_id: str) -> dict:
         runtime = self.store.load_runtime()
         jobs = runtime.get("jobs", {})
@@ -350,6 +366,34 @@ class JobSearchOrchestrator:
             job_id=job_id,
         )
         return self.resume_agent.run(job_id)
+
+    def approve_resume(self, job_id: str) -> dict:
+        runtime = self.store.load_runtime()
+        jobs = runtime.get("jobs", {})
+        if job_id not in jobs:
+            raise ValueError(f"Job ID '{job_id}' not found.")
+        if jobs[job_id]["resume_status"] != "draft_ready":
+            raise ValueError("Resume draft must be ready before approval.")
+        jobs[job_id]["resume_status"] = "approved"
+        jobs[job_id]["last_agent"] = "resume-approval"
+        jobs[job_id]["updated_at"] = utc_now()
+        self.store.save_runtime(runtime)
+
+        queue = self.store.load_queue()
+        for item in queue:
+            if item["id"] == job_id:
+                item["resume_status"] = "approved"
+                item["selected_resume_path"] = jobs[job_id]["selected_resume_path"]
+                item["last_agent"] = "resume-approval"
+        self.store.save_queue(queue)
+        self.store.append_memory(
+            "resume-approval",
+            "approve-resume",
+            f"Approved tailored resume for {jobs[job_id]['title']}.",
+            job_id=job_id,
+            payload={"selected_resume_path": jobs[job_id]["selected_resume_path"]},
+        )
+        return jobs[job_id]
 
     def apply_job(self, job_id: str) -> dict:
         return self.apply_agent.run(job_id)

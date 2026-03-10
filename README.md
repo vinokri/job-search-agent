@@ -5,8 +5,8 @@ This repository contains a GitHub-ready local project for finding relevant jobs 
 The current implementation is an orchestrated multi-agent workflow:
 
 - `SearchJobAgent` collects live jobs, normalizes them, and builds the shortlist
-- `ResumeUpdateAgent` creates a job-specific resume draft after approval
-- `ApplyJobAgent` records the apply-ready packet and marks the workflow sent
+- `ResumeUpdateAgent` parses a source resume, rewrites a job-specific draft, and stages a tailored file for approval
+- `ApplyJobAgent` records the apply-ready packet and uses the latest approved tailored resume file
 - `JobSearchOrchestrator` coordinates agent transitions, shared state, and memory
 - runtime state and agent memory are stored in JSON so the UI and CLI share the same workflow state
 
@@ -21,8 +21,9 @@ External ATS form submission is still intentionally out of scope. The `ApplyJobA
 
 Current limitation:
 
-- The resume file path is wired into the project, but the PDF content was not auto-parsed because this environment does not currently have a PDF extraction library installed.
 - The LinkedIn URL is stored in the profile, but this repository does not scrape LinkedIn directly.
+- Resume parsing is best-effort. Text, Markdown, HTML, and many DOCX/RTF inputs are handled well; PDF parsing uses a lightweight text-extraction fallback.
+- Tailored resume output is always generated as Markdown. DOCX generation is attempted when `textutil` is available on the host.
 
 ## Project structure
 
@@ -43,7 +44,9 @@ Current limitation:
 │   ├── jobs.sample.json
 │   ├── profile.json
 │   ├── resume-drafts/
+│   ├── resume-structured.json
 │   ├── review-queue.json
+│   ├── source-resumes/
 │   ├── shortlist.json
 │   └── shortlist.md
 ├── src/job_agent/
@@ -54,6 +57,7 @@ Current limitation:
 │   ├── models.py
 │   ├── orchestration.py
 │   ├── queue.py
+│   ├── resume.py
 │   ├── shortlist.py
 │   └── web.py
 └── tests/
@@ -75,6 +79,7 @@ Current limitation:
 11. Added a live job collector and cache file for supported company career sources.
 12. Added `run.sh` for one-command local startup.
 13. Refactored the workflow into explicit search, resume, and apply agents with orchestration, runtime state, and memory.
+14. Added resume source upload/selection, structured resume parsing, tailored draft generation, preview, and resume approval before apply.
 
 ## Agent workflow
 
@@ -89,15 +94,18 @@ Current limitation:
 
 ### 2. ResumeUpdateAgent
 
+- parses the selected/uploaded source resume into `data/resume-structured.json`
 - runs only after a job is approved
 - creates a tailored resume draft in `data/resume-drafts/<job-id>.md`
-- updates the job state to `resume_status = ready`
+- attempts a DOCX output in `data/resume-drafts/<job-id>.docx` when supported
+- updates the job state to `resume_status = draft_ready`
 - appends resume events to `data/agent-memory.json`
 
 ### 3. ApplyJobAgent
 
-- runs only after approval and resume preparation
+- runs only after approval and resume approval
 - creates an application packet in `data/application-packets/<job-id>.json`
+- records the exact tailored resume file path selected for the application
 - updates the job state to `apply_status = sent`
 - appends apply events to `data/agent-memory.json`
 
@@ -113,7 +121,24 @@ Current limitation:
 
 Edit `data/profile.json` and add any missing experience, skills, location preferences, or sponsorship constraints.
 
-### 2. Collect jobs from official career sites
+### 2. Parse your source resume
+
+You can either point the system at an existing local resume path or upload a file in the UI.
+
+CLI:
+
+```bash
+PYTHONPATH=src python3 -m job_agent parse-resume-source \
+  --resume-path "/absolute/path/to/resume.pdf"
+```
+
+This step:
+
+- updates `candidate.resume_path` in `data/profile.json`
+- extracts text from the source resume
+- writes structured editable content to `data/resume-structured.json`
+
+### 3. Collect jobs from official career sites
 
 Normalize jobs into `data/jobs.sample.json` or another JSON file using this shape:
 
@@ -134,7 +159,7 @@ Normalize jobs into `data/jobs.sample.json` or another JSON file using this shap
 ]
 ```
 
-### 3. Generate the shortlist
+### 4. Generate the shortlist
 
 The `shortlist` command can now take runtime search parameters:
 
@@ -155,7 +180,7 @@ python3 -m job_agent shortlist \
   --company "Snowflake"
 ```
 
-### 4. Run the end-to-end search in one command
+### 5. Run the end-to-end search in one command
 
 If you want a single command that generates both the shortlist and the review queue, use `run-search`:
 
@@ -203,7 +228,7 @@ PYTHONPATH=src python3 -m job_agent collect-live-jobs \
   --company "Google"
 ```
 
-### 5. Seed the approval queue manually
+### 6. Seed the approval queue manually
 
 ```bash
 python3 -m job_agent seed-queue \
@@ -213,17 +238,40 @@ python3 -m job_agent seed-queue \
 
 Use this only if you want to separate shortlist generation from queue creation.
 
-### 6. Approve or reject jobs
+### 7. Approve jobs and generate tailored resumes
 
 ```bash
-python3 -m job_agent set-status \
-  --queue data/review-queue.json \
-  --job-id nvidia-123 \
-  --status approved \
-  --notes "Looks strong for platform and ML systems work"
+PYTHONPATH=src python3 -m job_agent approve-job --job-id snowflake-001
 ```
 
-### 7. Export only approved jobs
+This transition:
+
+1. marks the role approved
+2. runs `ResumeUpdateAgent`
+3. creates the tailored draft files
+4. updates runtime state and memory
+
+### 8. Preview and approve the tailored resume
+
+CLI:
+
+```bash
+PYTHONPATH=src python3 -m job_agent approve-resume --job-id snowflake-001
+```
+
+In the UI, this is the `Approve Resume` button after the draft preview appears.
+
+### 9. Apply using the latest approved tailored resume
+
+CLI:
+
+```bash
+PYTHONPATH=src python3 -m job_agent apply-job --job-id snowflake-001
+```
+
+This uses the latest `selected_resume_path` recorded in runtime state.
+
+### 10. Export only approved jobs
 
 ```bash
 python3 -m job_agent export-approved \
@@ -231,7 +279,7 @@ python3 -m job_agent export-approved \
   --out data/approved-jobs.json
 ```
 
-At this point the automation stops. The approved list becomes the handoff point for later application preparation.
+At this point the internal workflow marks the application packet sent. External ATS form submission is still a separate future step.
 
 ## Local UI
 
@@ -257,10 +305,14 @@ Then open [http://127.0.0.1:8000](http://127.0.0.1:8000).
 
 The UI supports:
 
+- selecting an existing resume path or uploading a source resume file
+- parsing the resume into structured editable content
 - running the search with up to 3 job titles and up to 5 company filters
 - collecting live jobs into `data/jobs.live.json` before scoring
 - viewing the ranked shortlist
 - approving jobs, which triggers the resume update agent
+- previewing the tailored resume draft in the queue
+- approving the tailored resume before apply
 - applying jobs, which triggers the apply agent
 - viewing agent runtime and recent memory events
 - exporting the approved jobs list
@@ -273,17 +325,25 @@ When you click `Approve`, the orchestrator:
 2. runs the resume update agent
 3. persists the new resume draft path and state
 
+When you click `Approve Resume`, the orchestrator:
+
+1. validates that a tailored draft exists
+2. marks that tailored file as the approved resume for the job
+3. persists `selected_resume_path` for the apply step
+
 When you click `Apply`, the orchestrator:
 
 1. validates that the job is approved
-2. validates that the resume draft is ready
+2. validates that the tailored resume is approved
 3. runs the apply agent
-4. persists the application packet path and sent state
+4. persists the application packet path, selected resume path, and sent state
 
 ## CLI agent commands
 
 ```bash
+PYTHONPATH=src python3 -m job_agent parse-resume-source --resume-path /absolute/path/to/resume.pdf
 PYTHONPATH=src python3 -m job_agent approve-job --job-id snowflake-001
+PYTHONPATH=src python3 -m job_agent approve-resume --job-id snowflake-001
 PYTHONPATH=src python3 -m job_agent apply-job --job-id snowflake-001
 ```
 

@@ -3,10 +3,12 @@ from __future__ import annotations
 import html
 import os
 from pathlib import Path
+from urllib.parse import unquote_plus
 from urllib.parse import parse_qs, quote_plus
 from wsgiref.simple_server import make_server
 
 from .orchestration import JobSearchOrchestrator, WorkflowStore, build_default_paths
+from .resume import sanitize_filename, store_uploaded_resume_bytes
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -20,6 +22,8 @@ DEFAULT_QUEUE = DEFAULT_PATHS.queue
 DEFAULT_APPROVED = DEFAULT_PATHS.approved
 DEFAULT_RUNTIME = DEFAULT_PATHS.runtime
 DEFAULT_MEMORY = DEFAULT_PATHS.memory
+DEFAULT_RESUME_STRUCTURED = DEFAULT_PATHS.resume_structured
+DEFAULT_RESUME_SOURCES = DEFAULT_PATHS.resume_sources
 DEFAULT_MARKDOWN = DEFAULT_PATHS.shortlist_markdown
 
 
@@ -73,6 +77,8 @@ def build_orchestrator() -> JobSearchOrchestrator:
     paths.approved = DEFAULT_APPROVED
     paths.runtime = DEFAULT_RUNTIME
     paths.memory = DEFAULT_MEMORY
+    paths.resume_structured = DEFAULT_RESUME_STRUCTURED
+    paths.resume_sources = DEFAULT_RESUME_SOURCES
     return JobSearchOrchestrator(WorkflowStore(paths))
 
 
@@ -82,6 +88,7 @@ def render_home(message: str = "") -> bytes:
     approved = load_json_if_present(DEFAULT_APPROVED)
     runtime = load_json_if_present(DEFAULT_RUNTIME) if DEFAULT_RUNTIME.exists() else {}
     memory = load_json_if_present(DEFAULT_MEMORY)
+    structured_resume = load_json_if_present(DEFAULT_RESUME_STRUCTURED) if DEFAULT_RESUME_STRUCTURED.exists() else {}
 
     shortlist_cards = "\n".join(render_shortlist_card(item) for item in shortlist) or "<p class='empty'>No shortlist yet.</p>"
     queue_rows = "\n".join(render_queue_card(item) for item in queue) or "<p class='empty'>No review queue yet.</p>"
@@ -333,10 +340,34 @@ def render_home(message: str = "") -> bytes:
         <p class="muted">Approved export: {html_escape(display_path(DEFAULT_APPROVED))}</p>
         <p class="muted">Agent runtime: {html_escape(display_path(DEFAULT_RUNTIME))}</p>
         <p class="muted">Agent memory: {html_escape(display_path(DEFAULT_MEMORY))}</p>
+        <p class="muted">Structured resume: {html_escape(display_path(DEFAULT_RESUME_STRUCTURED))}</p>
         <p class="muted">Last search companies: {html_escape(', '.join(last_search.get('companies', [])) or 'profile defaults')}</p>
       </div>
     </section>
     <section class="grid">
+      <div class="panel full">
+        <h2>Resume Source</h2>
+        <form method="post" action="/resume-source" enctype="multipart/form-data">
+          <div class="field-row">
+            <div>
+              <label for="resume_path">Existing resume path</label>
+              <input id="resume_path" name="resume_path" placeholder="/absolute/path/to/resume.pdf">
+            </div>
+            <div>
+              <label for="resume_file">Upload resume file</label>
+              <input id="resume_file" name="resume_file" type="file">
+            </div>
+            <div>
+              <label for="resume_filename">Optional filename label</label>
+              <input id="resume_filename" name="resume_filename" placeholder="vinodh-resume.pdf">
+            </div>
+          </div>
+          <div class="actions">
+            <button type="submit" class="secondary">Parse resume source</button>
+          </div>
+        </form>
+        <p class="muted">Parsed sections: {html_escape(', '.join(sorted(structured_resume.get('sections', {}).keys())) or 'none yet')}</p>
+      </div>
       <div class="panel full">
         <h2>Run Search</h2>
         <form method="post" action="/run-search">
@@ -431,6 +462,9 @@ def render_queue_card(item: dict) -> str:
     apply = item.get("apply_status", "idle")
     resume_path = item.get("resume_draft_path", "")
     packet_path = item.get("application_packet_path", "")
+    preview = ""
+    if resume_path and Path(resume_path).exists():
+        preview = "\n".join(Path(resume_path).read_text(encoding="utf-8").splitlines()[:8])
     return f"""
 <article class="job-card">
   <h3>{html_escape(item.get("title", ""))}</h3>
@@ -438,10 +472,18 @@ def render_queue_card(item: dict) -> str:
   <p class="muted"><a href="{html_escape(item.get("url", ""))}" target="_blank" rel="noreferrer">Open job</a></p>
   <p class="muted">Resume agent: {html_escape(resume)}{f" · Draft: {html_escape(resume_path)}" if resume_path else ""}</p>
   <p class="muted">Apply agent: {html_escape(apply)}{f" · Packet: {html_escape(packet_path)}" if packet_path else ""}</p>
+  {f'<pre class="muted" style="white-space: pre-wrap; overflow-x: auto; background: rgba(19,35,59,0.04); padding: 12px; border-radius: 12px;">{html_escape(preview)}</pre>' if preview else ''}
   <form class="inline-form" method="post" action="/approve-job">
     <input type="hidden" name="job_id" value="{job_id}">
     <input type="text" name="notes" placeholder="Optional review note" value="{html_escape(item.get('notes', ''))}">
     <button type="submit" class="secondary">Approve</button>
+  </form>
+  <form class="inline-form" method="post" action="/approve-resume">
+    <input type="hidden" name="job_id" value="{job_id}">
+    <input type="text" disabled value="{html_escape(item.get('resume_preview_path', 'no preview yet'))}">
+    <button type="submit" class="secondary">Approve Resume</button>
+    <button type="button" class="warning" disabled>Resume {html_escape(resume)}</button>
+    <button type="button" disabled>{html_escape(item.get('selected_resume_path', ''))}</button>
   </form>
   <form class="inline-form" method="post" action="/apply-job">
     <input type="hidden" name="job_id" value="{job_id}">
@@ -476,6 +518,55 @@ def render_memory_row(item: dict) -> str:
 """
 
 
+def parse_multipart(body: bytes, content_type: str) -> dict[str, list[object]]:
+    boundary_match = None
+    for part in content_type.split(";"):
+        part = part.strip()
+        if part.startswith("boundary="):
+            boundary_match = part.split("=", 1)[1]
+            break
+    if not boundary_match:
+        return {}
+    boundary = boundary_match.encode("utf-8")
+    chunks = body.split(b"--" + boundary)
+    result: dict[str, list[object]] = {}
+    for chunk in chunks:
+        chunk = chunk.strip(b"\r\n")
+        if not chunk or chunk == b"--":
+            continue
+        header_blob, _, data = chunk.partition(b"\r\n\r\n")
+        headers = header_blob.decode("utf-8", errors="replace")
+        disposition = next((line for line in headers.split("\r\n") if line.lower().startswith("content-disposition:")), "")
+        name_match = None
+        filename_match = None
+        for part in disposition.split(";"):
+            part = part.strip()
+            if part.startswith("name="):
+                name_match = part.split("=", 1)[1].strip('"')
+            elif part.startswith("filename="):
+                filename_match = part.split("=", 1)[1].strip('"')
+        if not name_match:
+            continue
+        data = data.rstrip(b"\r\n")
+        if filename_match:
+            result.setdefault(name_match, []).append(
+                {"filename": filename_match, "content": data}
+            )
+        else:
+            result.setdefault(name_match, []).append(data.decode("utf-8", errors="replace"))
+    return result
+
+
+def parse_request_form(environ) -> dict[str, list[object]]:
+    size = int(environ.get("CONTENT_LENGTH") or 0)
+    body = environ["wsgi.input"].read(size)
+    content_type = environ.get("CONTENT_TYPE", "")
+    if "multipart/form-data" in content_type:
+        return parse_multipart(body, content_type)
+    decoded = body.decode("utf-8")
+    return {key: [unquote_plus(value) for value in values] for key, values in parse_qs(decoded).items()}
+
+
 def redirect(start_response, location: str) -> list[bytes]:
     start_response("303 See Other", [("Location", location)])
     return [b""]
@@ -490,6 +581,23 @@ def handle_run_search(form: dict[str, list[str]]) -> str:
     return f"Search completed using {source}. {result.get('shortlist_count', 0)} jobs shortlisted."
 
 
+def handle_resume_source(form: dict[str, list[object]]) -> str:
+    orchestrator = build_orchestrator()
+    resume_path = str(form.get("resume_path", [""])[0]).strip() if form.get("resume_path") else ""
+    upload = form.get("resume_file", [])
+    if upload and isinstance(upload[0], dict) and upload[0].get("content"):
+        uploaded = upload[0]
+        filename = sanitize_filename(
+            str(form.get("resume_filename", [""])[0]).strip() or uploaded.get("filename", "resume-upload.txt")
+        )
+        destination = DEFAULT_RESUME_SOURCES / filename
+        resume_path = store_uploaded_resume_bytes(destination, uploaded["content"])
+    if not resume_path:
+        raise ValueError("Provide an existing resume path or upload a resume file.")
+    structured = orchestrator.refresh_resume_source(resume_path)
+    return f"Resume source parsed. Sections found: {', '.join(sorted(structured.get('sections', {}).keys())) or 'none'}."
+
+
 def handle_approve_job(form: dict[str, list[str]]) -> str:
     job_id = form.get("job_id", [""])[0]
     orchestrator = build_orchestrator()
@@ -502,6 +610,13 @@ def handle_apply_job(form: dict[str, list[str]]) -> str:
     orchestrator = build_orchestrator()
     result = orchestrator.apply_job(job_id)
     return f"Apply agent marked {job_id} sent and wrote {result.get('application_packet_path', '')}."
+
+
+def handle_approve_resume(form: dict[str, list[str]]) -> str:
+    job_id = form.get("job_id", [""])[0]
+    orchestrator = build_orchestrator()
+    result = orchestrator.approve_resume(job_id)
+    return f"Resume approved for {job_id}. Selected file: {result.get('selected_resume_path', '')}."
 
 
 def handle_export_approved() -> str:
@@ -521,15 +636,17 @@ def application(environ, start_response):
         start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
         return [body]
 
-    if method == "POST" and path in {"/run-search", "/approve-job", "/apply-job", "/export-approved"}:
-        size = int(environ.get("CONTENT_LENGTH") or 0)
-        body = environ["wsgi.input"].read(size).decode("utf-8")
-        form = parse_qs(body)
+    if method == "POST" and path in {"/resume-source", "/run-search", "/approve-job", "/approve-resume", "/apply-job", "/export-approved"}:
+        form = parse_request_form(environ)
         try:
-            if path == "/run-search":
+            if path == "/resume-source":
+                message = handle_resume_source(form)
+            elif path == "/run-search":
                 message = handle_run_search(form)
             elif path == "/approve-job":
                 message = handle_approve_job(form)
+            elif path == "/approve-resume":
+                message = handle_approve_resume(form)
             elif path == "/apply-job":
                 message = handle_apply_job(form)
             else:

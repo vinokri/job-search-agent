@@ -95,8 +95,20 @@ def build_parser() -> argparse.ArgumentParser:
     approve_parser = subparsers.add_parser("approve-job", help="Approve a job and trigger the resume agent.")
     approve_parser.add_argument("--job-id", required=True)
 
+    approve_resume_parser = subparsers.add_parser(
+        "approve-resume",
+        help="Approve a generated tailored resume so the apply agent can use it.",
+    )
+    approve_resume_parser.add_argument("--job-id", required=True)
+
     apply_parser = subparsers.add_parser("apply-job", help="Trigger the apply agent for an approved job.")
     apply_parser.add_argument("--job-id", required=True)
+
+    resume_source_parser = subparsers.add_parser(
+        "parse-resume-source",
+        help="Parse a resume source file into structured editable content.",
+    )
+    resume_source_parser.add_argument("--resume-path", required=True)
 
     live_parser = subparsers.add_parser(
         "collect-live-jobs",
@@ -173,8 +185,14 @@ def main() -> None:
     if args.command == "approve-job":
         orchestrator.approve_job(args.job_id)
         return
+    if args.command == "approve-resume":
+        orchestrator.approve_resume(args.job_id)
+        return
     if args.command == "apply-job":
         orchestrator.apply_job(args.job_id)
+        return
+    if args.command == "parse-resume-source":
+        orchestrator.refresh_resume_source(args.resume_path)
         return
     if args.command == "collect-live-jobs":
         validate_runtime_filters(parser, args.job_titles, args.companies)
