@@ -698,8 +698,8 @@ def handle_resume_source(form: dict[str, list[object]]) -> str:
 def handle_approve_job(form: dict[str, list[str]]) -> str:
     job_id = form.get("job_id", [""])[0]
     orchestrator = build_orchestrator()
-    result = orchestrator.approve_job(job_id)
-    return f"Approved {job_id}. Resume agent prepared {result.get('resume_draft_path', '')}."
+    orchestrator.approve_job(job_id)
+    return f"Approved {job_id}. The tailored resume is ready in the queue card. Use the download links to open it."
 
 
 def handle_apply_job(form: dict[str, list[str]]) -> str:
@@ -724,8 +724,8 @@ def handle_mark_submitted(form: dict[str, list[str]]) -> str:
 def handle_approve_resume(form: dict[str, list[str]]) -> str:
     job_id = form.get("job_id", [""])[0]
     orchestrator = build_orchestrator()
-    result = orchestrator.approve_resume(job_id)
-    return f"Resume approved for {job_id}. Selected file: {result.get('selected_resume_path', '')}."
+    orchestrator.approve_resume(job_id)
+    return f"Resume approved for {job_id}. The selected resume artifact is now attached to the apply flow."
 
 
 def handle_export_approved() -> str:
