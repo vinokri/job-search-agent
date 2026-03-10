@@ -108,7 +108,31 @@ python3 -m job_agent shortlist \
   --company "Snowflake"
 ```
 
-### 4. Seed the approval queue
+### 4. Run the end-to-end search in one command
+
+If you want a single command that generates both the shortlist and the review queue, use `run-search`:
+
+```bash
+PYTHONPATH=src python3 -m job_agent run-search \
+  --profile data/profile.json \
+  --jobs data/jobs.sample.json \
+  --shortlist-out data/shortlist.json \
+  --queue-out data/review-queue.json \
+  --markdown data/shortlist.md \
+  --job-title "software engineer" \
+  --job-title "data engineer" \
+  --company "NVIDIA" \
+  --company "Snowflake"
+```
+
+This command:
+
+- filters the jobs by the provided titles and companies
+- scores the filtered jobs
+- writes the ranked shortlist
+- seeds the review queue with `pending` items
+
+### 5. Seed the approval queue manually
 
 ```bash
 python3 -m job_agent seed-queue \
@@ -116,7 +140,9 @@ python3 -m job_agent seed-queue \
   --out data/review-queue.json
 ```
 
-### 5. Approve or reject jobs
+Use this only if you want to separate shortlist generation from queue creation.
+
+### 6. Approve or reject jobs
 
 ```bash
 python3 -m job_agent set-status \
@@ -126,7 +152,7 @@ python3 -m job_agent set-status \
   --notes "Looks strong for platform and ML systems work"
 ```
 
-### 6. Export only approved jobs
+### 7. Export only approved jobs
 
 ```bash
 python3 -m job_agent export-approved \

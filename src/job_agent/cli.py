@@ -13,6 +13,13 @@ def limited_list(value: str, label: str, maximum: int) -> str:
     return cleaned
 
 
+def validate_runtime_filters(parser: argparse.ArgumentParser, job_titles: list[str] | None, companies: list[str] | None) -> None:
+    if job_titles and len(job_titles) > 3:
+        parser.error("--job-title can be provided at most 3 times.")
+    if companies and len(companies) > 5:
+        parser.error("--company can be provided at most 5 times.")
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Shortlist target-company jobs and stop at approval."
@@ -33,6 +40,31 @@ def build_parser() -> argparse.ArgumentParser:
         help="Job title filter. Repeat up to 3 times.",
     )
     shortlist_parser.add_argument(
+        "--company",
+        dest="companies",
+        action="append",
+        type=lambda value: limited_list(value, "company", 5),
+        help="Company filter. Repeat up to 5 times.",
+    )
+
+    run_parser = subparsers.add_parser(
+        "run-search",
+        help="Generate the shortlist and seed the review queue in one step.",
+    )
+    run_parser.add_argument("--profile", required=True)
+    run_parser.add_argument("--jobs", required=True)
+    run_parser.add_argument("--shortlist-out", required=True)
+    run_parser.add_argument("--queue-out", required=True)
+    run_parser.add_argument("--markdown")
+    run_parser.add_argument("--limit", type=int, default=25)
+    run_parser.add_argument(
+        "--job-title",
+        dest="job_titles",
+        action="append",
+        type=lambda value: limited_list(value, "job title", 3),
+        help="Job title filter. Repeat up to 3 times.",
+    )
+    run_parser.add_argument(
         "--company",
         dest="companies",
         action="append",
@@ -62,10 +94,7 @@ def main() -> None:
     args = parser.parse_args()
 
     if args.command == "shortlist":
-        if args.job_titles and len(args.job_titles) > 3:
-            parser.error("--job-title can be provided at most 3 times.")
-        if args.companies and len(args.companies) > 5:
-            parser.error("--company can be provided at most 5 times.")
+        validate_runtime_filters(parser, args.job_titles, args.companies)
         build_shortlist(
             args.profile,
             args.jobs,
@@ -75,6 +104,19 @@ def main() -> None:
             args.job_titles,
             args.companies,
         )
+        return
+    if args.command == "run-search":
+        validate_runtime_filters(parser, args.job_titles, args.companies)
+        build_shortlist(
+            args.profile,
+            args.jobs,
+            args.shortlist_out,
+            args.markdown,
+            args.limit,
+            args.job_titles,
+            args.companies,
+        )
+        seed_queue(args.shortlist_out, args.queue_out)
         return
     if args.command == "seed-queue":
         seed_queue(args.shortlist, args.out)
