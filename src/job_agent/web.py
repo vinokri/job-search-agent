@@ -6,20 +6,21 @@ from pathlib import Path
 from urllib.parse import parse_qs, quote_plus
 from wsgiref.simple_server import make_server
 
-from .collectors import collect_live_jobs
-from .queue import export_approved, update_status
-from .shortlist import build_shortlist
+from .orchestration import JobSearchOrchestrator, WorkflowStore, build_default_paths
 
 
 ROOT = Path(__file__).resolve().parents[2]
 DATA_DIR = ROOT / "data"
-DEFAULT_PROFILE = DATA_DIR / "profile.json"
-DEFAULT_JOBS = DATA_DIR / "jobs.sample.json"
-DEFAULT_LIVE_JOBS = DATA_DIR / "jobs.live.json"
-DEFAULT_SHORTLIST = DATA_DIR / "shortlist.json"
-DEFAULT_QUEUE = DATA_DIR / "review-queue.json"
-DEFAULT_APPROVED = DATA_DIR / "approved-jobs.json"
-DEFAULT_MARKDOWN = DATA_DIR / "shortlist.md"
+DEFAULT_PATHS = build_default_paths(ROOT)
+DEFAULT_PROFILE = DEFAULT_PATHS.profile
+DEFAULT_JOBS = DEFAULT_PATHS.sample_jobs
+DEFAULT_LIVE_JOBS = DEFAULT_PATHS.live_jobs
+DEFAULT_SHORTLIST = DEFAULT_PATHS.shortlist
+DEFAULT_QUEUE = DEFAULT_PATHS.queue
+DEFAULT_APPROVED = DEFAULT_PATHS.approved
+DEFAULT_RUNTIME = DEFAULT_PATHS.runtime
+DEFAULT_MEMORY = DEFAULT_PATHS.memory
+DEFAULT_MARKDOWN = DEFAULT_PATHS.shortlist_markdown
 
 
 def read_text(path: Path) -> str:
@@ -61,15 +62,33 @@ def status_badge(status: str) -> str:
     return f'<span class="badge badge-{html_escape(status)}">{html_escape(status)}</span>'
 
 
+def build_orchestrator() -> JobSearchOrchestrator:
+    paths = build_default_paths(ROOT)
+    paths.profile = DEFAULT_PROFILE
+    paths.sample_jobs = DEFAULT_JOBS
+    paths.live_jobs = DEFAULT_LIVE_JOBS
+    paths.shortlist = DEFAULT_SHORTLIST
+    paths.shortlist_markdown = DEFAULT_MARKDOWN
+    paths.queue = DEFAULT_QUEUE
+    paths.approved = DEFAULT_APPROVED
+    paths.runtime = DEFAULT_RUNTIME
+    paths.memory = DEFAULT_MEMORY
+    return JobSearchOrchestrator(WorkflowStore(paths))
+
+
 def render_home(message: str = "") -> bytes:
     shortlist = load_json_if_present(DEFAULT_SHORTLIST)
     queue = load_json_if_present(DEFAULT_QUEUE)
     approved = load_json_if_present(DEFAULT_APPROVED)
+    runtime = load_json_if_present(DEFAULT_RUNTIME) if DEFAULT_RUNTIME.exists() else {}
+    memory = load_json_if_present(DEFAULT_MEMORY)
 
     shortlist_cards = "\n".join(render_shortlist_card(item) for item in shortlist) or "<p class='empty'>No shortlist yet.</p>"
     queue_rows = "\n".join(render_queue_card(item) for item in queue) or "<p class='empty'>No review queue yet.</p>"
     approved_rows = "\n".join(render_approved_card(item) for item in approved) or "<p class='empty'>No approved jobs exported yet.</p>"
+    memory_rows = "\n".join(render_memory_row(item) for item in memory[-8:][::-1]) or "<p class='empty'>No memory yet.</p>"
     banner = f"<div class='banner'>{html_escape(message)}</div>" if message else ""
+    last_search = runtime.get("last_search", {}) if isinstance(runtime, dict) else {}
 
     page = f"""<!doctype html>
 <html lang="en">
@@ -300,18 +319,21 @@ def render_home(message: str = "") -> bytes:
         <p class="lede">Run a profile-based search, inspect the shortlist, approve the roles that matter, and stop before application submission.</p>
         <div class="stats">
           <div class="stat"><strong>{len(shortlist)}</strong><span class="meta">Shortlisted jobs</span></div>
-          <div class="stat"><strong>{sum(1 for item in queue if item.get("status") == "approved")}</strong><span class="meta">Approved roles</span></div>
-          <div class="stat"><strong>{sum(1 for item in queue if item.get("status") == "pending")}</strong><span class="meta">Pending review</span></div>
+          <div class="stat"><strong>{sum(1 for item in queue if item.get("review_status") == "approved")}</strong><span class="meta">Approved roles</span></div>
+          <div class="stat"><strong>{sum(1 for item in queue if item.get("apply_status") == "sent")}</strong><span class="meta">Applications sent</span></div>
         </div>
       </div>
       <div class="panel">
-        <h2>Current files</h2>
+        <h2>Runtime</h2>
         <p class="muted">Profile: {html_escape(display_path(DEFAULT_PROFILE))}</p>
         <p class="muted">Sample jobs: {html_escape(display_path(DEFAULT_JOBS))}</p>
         <p class="muted">Live jobs cache: {html_escape(display_path(DEFAULT_LIVE_JOBS))}</p>
         <p class="muted">Shortlist: {html_escape(display_path(DEFAULT_SHORTLIST))}</p>
         <p class="muted">Queue: {html_escape(display_path(DEFAULT_QUEUE))}</p>
         <p class="muted">Approved export: {html_escape(display_path(DEFAULT_APPROVED))}</p>
+        <p class="muted">Agent runtime: {html_escape(display_path(DEFAULT_RUNTIME))}</p>
+        <p class="muted">Agent memory: {html_escape(display_path(DEFAULT_MEMORY))}</p>
+        <p class="muted">Last search companies: {html_escape(', '.join(last_search.get('companies', [])) or 'profile defaults')}</p>
       </div>
     </section>
     <section class="grid">
@@ -376,6 +398,10 @@ def render_home(message: str = "") -> bytes:
         </form>
         <div class="list" style="margin-top: 16px;">{approved_rows}</div>
       </div>
+      <div class="panel full">
+        <h2>Agent Memory</h2>
+        <div class="list">{memory_rows}</div>
+      </div>
     </section>
   </div>
 </body>
@@ -400,17 +426,29 @@ def render_shortlist_card(item: dict) -> str:
 
 def render_queue_card(item: dict) -> str:
     job_id = html_escape(item.get("id", ""))
+    review = item.get("review_status", item.get("status", "pending"))
+    resume = item.get("resume_status", "idle")
+    apply = item.get("apply_status", "idle")
+    resume_path = item.get("resume_draft_path", "")
+    packet_path = item.get("application_packet_path", "")
     return f"""
 <article class="job-card">
   <h3>{html_escape(item.get("title", ""))}</h3>
-  <p><strong>{html_escape(item.get("company", ""))}</strong> · Score {item.get("score", 0)} · {status_badge(item.get("status", "pending"))}</p>
+  <p><strong>{html_escape(item.get("company", ""))}</strong> · Score {item.get("score", 0)} · Review {status_badge(review)}</p>
   <p class="muted"><a href="{html_escape(item.get("url", ""))}" target="_blank" rel="noreferrer">Open job</a></p>
-  <form class="inline-form" method="post" action="/set-status">
+  <p class="muted">Resume agent: {html_escape(resume)}{f" · Draft: {html_escape(resume_path)}" if resume_path else ""}</p>
+  <p class="muted">Apply agent: {html_escape(apply)}{f" · Packet: {html_escape(packet_path)}" if packet_path else ""}</p>
+  <form class="inline-form" method="post" action="/approve-job">
     <input type="hidden" name="job_id" value="{job_id}">
     <input type="text" name="notes" placeholder="Optional review note" value="{html_escape(item.get('notes', ''))}">
-    <button type="submit" name="status" value="approved" class="secondary">Approve</button>
-    <button type="submit" name="status" value="hold" class="warning">Hold</button>
-    <button type="submit" name="status" value="rejected">Reject</button>
+    <button type="submit" class="secondary">Approve</button>
+  </form>
+  <form class="inline-form" method="post" action="/apply-job">
+    <input type="hidden" name="job_id" value="{job_id}">
+    <input type="text" disabled value="{html_escape(item.get('last_agent', 'search-job-agent'))}">
+    <button type="submit" class="secondary">Apply</button>
+    <button type="button" class="warning" disabled>Resume {html_escape(resume)}</button>
+    <button type="button" disabled>{html_escape(apply)}</button>
   </form>
 </article>
 """
@@ -427,6 +465,17 @@ def render_approved_card(item: dict) -> str:
 """
 
 
+def render_memory_row(item: dict) -> str:
+    return f"""
+<article class="job-card">
+  <h3>{html_escape(item.get("agent", ""))}</h3>
+  <p class="muted">{html_escape(item.get("timestamp", ""))}</p>
+  <p>{html_escape(item.get("message", ""))}</p>
+  <p class="muted">Action: {html_escape(item.get("action", ""))}{f" · Job {html_escape(item.get('job_id', ''))}" if item.get('job_id') else ""}</p>
+</article>
+"""
+
+
 def redirect(start_response, location: str) -> list[bytes]:
     start_response("303 See Other", [("Location", location)])
     return [b""]
@@ -435,34 +484,30 @@ def redirect(start_response, location: str) -> list[bytes]:
 def handle_run_search(form: dict[str, list[str]]) -> str:
     job_titles = parse_multi_value(form, "job_title", 3)
     companies = parse_multi_value(form, "company", 5)
-    live_jobs = collect_live_jobs(str(DEFAULT_LIVE_JOBS), job_titles or None, companies or None, 20)
-    jobs_path = DEFAULT_LIVE_JOBS if live_jobs else DEFAULT_JOBS
-    build_shortlist(
-        str(DEFAULT_PROFILE),
-        str(jobs_path),
-        str(DEFAULT_SHORTLIST),
-        str(DEFAULT_MARKDOWN),
-        25,
-        job_titles or None,
-        companies or None,
-    )
-    from .queue import seed_queue
-
-    seed_queue(str(DEFAULT_SHORTLIST), str(DEFAULT_QUEUE))
-    source = "live company career pages" if live_jobs else "the sample job file"
-    return f"Search completed using {source}. Shortlist and review queue refreshed."
+    orchestrator = build_orchestrator()
+    result = orchestrator.run_search(job_titles or None, companies or None, 25)
+    source = "live company career pages" if result.get("live_jobs_count") else "the sample job file"
+    return f"Search completed using {source}. {result.get('shortlist_count', 0)} jobs shortlisted."
 
 
-def handle_set_status(form: dict[str, list[str]]) -> str:
+def handle_approve_job(form: dict[str, list[str]]) -> str:
     job_id = form.get("job_id", [""])[0]
-    status = form.get("status", ["pending"])[0]
-    notes = form.get("notes", [""])[0].strip()
-    update_status(str(DEFAULT_QUEUE), job_id, status, notes)
-    return f"Updated {job_id} to {status}."
+    orchestrator = build_orchestrator()
+    result = orchestrator.approve_job(job_id)
+    return f"Approved {job_id}. Resume agent prepared {result.get('resume_draft_path', '')}."
+
+
+def handle_apply_job(form: dict[str, list[str]]) -> str:
+    job_id = form.get("job_id", [""])[0]
+    orchestrator = build_orchestrator()
+    result = orchestrator.apply_job(job_id)
+    return f"Apply agent marked {job_id} sent and wrote {result.get('application_packet_path', '')}."
 
 
 def handle_export_approved() -> str:
-    export_approved(str(DEFAULT_QUEUE), str(DEFAULT_APPROVED))
+    build_orchestrator().store.save_approved(
+        [item for item in load_json_if_present(DEFAULT_QUEUE) if item.get("review_status") == "approved"]
+    )
     return "Approved jobs exported."
 
 
@@ -476,15 +521,17 @@ def application(environ, start_response):
         start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
         return [body]
 
-    if method == "POST" and path in {"/run-search", "/set-status", "/export-approved"}:
+    if method == "POST" and path in {"/run-search", "/approve-job", "/apply-job", "/export-approved"}:
         size = int(environ.get("CONTENT_LENGTH") or 0)
         body = environ["wsgi.input"].read(size).decode("utf-8")
         form = parse_qs(body)
         try:
             if path == "/run-search":
                 message = handle_run_search(form)
-            elif path == "/set-status":
-                message = handle_set_status(form)
+            elif path == "/approve-job":
+                message = handle_approve_job(form)
+            elif path == "/apply-job":
+                message = handle_apply_job(form)
             else:
                 message = handle_export_approved()
             return redirect(start_response, f"/?message={quote_plus(message)}")

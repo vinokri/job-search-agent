@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import argparse
+from pathlib import Path
 
 from .collectors import collect_live_jobs
+from .orchestration import JobSearchOrchestrator, WorkflowStore, build_default_paths
 from .queue import export_approved, seed_queue, update_status
 from .shortlist import build_shortlist
 from .web import serve_ui
@@ -90,6 +92,12 @@ def build_parser() -> argparse.ArgumentParser:
     export_parser.add_argument("--queue", required=True)
     export_parser.add_argument("--out", required=True)
 
+    approve_parser = subparsers.add_parser("approve-job", help="Approve a job and trigger the resume agent.")
+    approve_parser.add_argument("--job-id", required=True)
+
+    apply_parser = subparsers.add_parser("apply-job", help="Trigger the apply agent for an approved job.")
+    apply_parser.add_argument("--job-id", required=True)
+
     live_parser = subparsers.add_parser(
         "collect-live-jobs",
         help="Fetch live jobs from the supported company career sites.",
@@ -121,6 +129,9 @@ def build_parser() -> argparse.ArgumentParser:
 def main() -> None:
     parser = build_parser()
     args = parser.parse_args()
+    orchestrator = JobSearchOrchestrator(
+        WorkflowStore(build_default_paths(Path(__file__).resolve().parents[2]))
+    )
 
     if args.command == "shortlist":
         validate_runtime_filters(parser, args.job_titles, args.companies)
@@ -136,21 +147,19 @@ def main() -> None:
         return
     if args.command == "run-search":
         validate_runtime_filters(parser, args.job_titles, args.companies)
-        jobs_path = args.jobs
         if args.collect_live:
-            live_out = args.live_jobs_out or args.jobs
-            collect_live_jobs(live_out, args.job_titles, args.companies, args.limit)
-            jobs_path = live_out
-        build_shortlist(
-            args.profile,
-            jobs_path,
-            args.shortlist_out,
-            args.markdown,
-            args.limit,
-            args.job_titles,
-            args.companies,
-        )
-        seed_queue(args.shortlist_out, args.queue_out)
+            orchestrator.run_search(args.job_titles, args.companies, args.limit)
+        else:
+            build_shortlist(
+                args.profile,
+                args.jobs,
+                args.shortlist_out,
+                args.markdown,
+                args.limit,
+                args.job_titles,
+                args.companies,
+            )
+            seed_queue(args.shortlist_out, args.queue_out)
         return
     if args.command == "seed-queue":
         seed_queue(args.shortlist, args.out)
@@ -160,6 +169,12 @@ def main() -> None:
         return
     if args.command == "export-approved":
         export_approved(args.queue, args.out)
+        return
+    if args.command == "approve-job":
+        orchestrator.approve_job(args.job_id)
+        return
+    if args.command == "apply-job":
+        orchestrator.apply_job(args.job_id)
         return
     if args.command == "collect-live-jobs":
         validate_runtime_filters(parser, args.job_titles, args.companies)

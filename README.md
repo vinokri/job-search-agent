@@ -2,15 +2,15 @@
 
 This repository contains a GitHub-ready local project for finding relevant jobs at NVIDIA, Databricks, Snowflake, and Google, ranking them against your profile, and stopping at a human approval gate before any application is submitted.
 
-The current implementation is intentionally conservative:
+The current implementation is an orchestrated multi-agent workflow:
 
-- it builds a structured candidate profile from your LinkedIn URL and resume path
-- it normalizes job records from official careers pages
-- it can fetch live openings from supported company career sources
-- it scores and shortlists jobs against your profile
-- it manages an approval queue so automation stops before submission
+- `SearchJobAgent` collects live jobs, normalizes them, and builds the shortlist
+- `ResumeUpdateAgent` creates a job-specific resume draft after approval
+- `ApplyJobAgent` records the apply-ready packet and marks the workflow sent
+- `JobSearchOrchestrator` coordinates agent transitions, shared state, and memory
+- runtime state and agent memory are stored in JSON so the UI and CLI share the same workflow state
 
-Automatic submission is intentionally out of scope in this first version because you asked the workflow to stop at approval.
+External ATS form submission is still intentionally out of scope. The `ApplyJobAgent` records the internal apply packet and sent workflow state, but it does not submit to third-party application forms yet.
 
 ## Profile seeded for this project
 
@@ -36,9 +36,13 @@ Current limitation:
 ├── Dockerfile
 ├── data/
 │   ├── approved-jobs.json
+│   ├── agent-memory.json
+│   ├── agent-runtime.json
+│   ├── application-packets/
 │   ├── jobs.live.json
 │   ├── jobs.sample.json
 │   ├── profile.json
+│   ├── resume-drafts/
 │   ├── review-queue.json
 │   ├── shortlist.json
 │   └── shortlist.md
@@ -48,6 +52,7 @@ Current limitation:
 │   ├── cli.py
 │   ├── collectors.py
 │   ├── models.py
+│   ├── orchestration.py
 │   ├── queue.py
 │   ├── shortlist.py
 │   └── web.py
@@ -69,6 +74,38 @@ Current limitation:
 10. Added a dependency-free web UI and container deployment files.
 11. Added a live job collector and cache file for supported company career sources.
 12. Added `run.sh` for one-command local startup.
+13. Refactored the workflow into explicit search, resume, and apply agents with orchestration, runtime state, and memory.
+
+## Agent workflow
+
+### 1. SearchJobAgent
+
+- collects live jobs from supported company sources
+- writes `data/jobs.live.json`
+- builds the shortlist
+- seeds the current review queue
+- updates `data/agent-runtime.json`
+- appends search events to `data/agent-memory.json`
+
+### 2. ResumeUpdateAgent
+
+- runs only after a job is approved
+- creates a tailored resume draft in `data/resume-drafts/<job-id>.md`
+- updates the job state to `resume_status = ready`
+- appends resume events to `data/agent-memory.json`
+
+### 3. ApplyJobAgent
+
+- runs only after approval and resume preparation
+- creates an application packet in `data/application-packets/<job-id>.json`
+- updates the job state to `apply_status = sent`
+- appends apply events to `data/agent-memory.json`
+
+### 4. JobSearchOrchestrator
+
+- owns the shared workflow transitions
+- ensures agents run in the correct order
+- keeps runtime state durable across UI and CLI usage
 
 ## Workflow
 
@@ -223,10 +260,32 @@ The UI supports:
 - running the search with up to 3 job titles and up to 5 company filters
 - collecting live jobs into `data/jobs.live.json` before scoring
 - viewing the ranked shortlist
-- approving, holding, or rejecting jobs from the review queue
+- approving jobs, which triggers the resume update agent
+- applying jobs, which triggers the apply agent
+- viewing agent runtime and recent memory events
 - exporting the approved jobs list
 
 When you click `Run search` in the UI, it now tries to fetch live jobs first from the supported company sources. If no live jobs are collected for that query, it falls back to the local sample file.
+
+When you click `Approve`, the orchestrator:
+
+1. marks the job approved
+2. runs the resume update agent
+3. persists the new resume draft path and state
+
+When you click `Apply`, the orchestrator:
+
+1. validates that the job is approved
+2. validates that the resume draft is ready
+3. runs the apply agent
+4. persists the application packet path and sent state
+
+## CLI agent commands
+
+```bash
+PYTHONPATH=src python3 -m job_agent approve-job --job-id snowflake-001
+PYTHONPATH=src python3 -m job_agent apply-job --job-id snowflake-001
+```
 
 ## Deployment
 

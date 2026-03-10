@@ -9,6 +9,7 @@ from unittest.mock import patch
 
 from job_agent.cli import main
 from job_agent.collectors import extract_google_results, extract_jobposting_from_html
+from job_agent.orchestration import JobSearchOrchestrator, WorkflowPaths, WorkflowStore
 from job_agent.queue import export_approved, seed_queue, update_status
 from job_agent.shortlist import build_shortlist
 from job_agent import web
@@ -19,6 +20,21 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class SmokeTest(unittest.TestCase):
+    def make_paths(self, tmp: Path) -> WorkflowPaths:
+        return WorkflowPaths(
+            profile=tmp / "profile.json",
+            sample_jobs=tmp / "jobs.sample.json",
+            live_jobs=tmp / "jobs.live.json",
+            shortlist=tmp / "shortlist.json",
+            shortlist_markdown=tmp / "shortlist.md",
+            queue=tmp / "review-queue.json",
+            approved=tmp / "approved.json",
+            runtime=tmp / "agent-runtime.json",
+            memory=tmp / "agent-memory.json",
+            resume_drafts=tmp / "resume-drafts",
+            application_packets=tmp / "application-packets",
+        )
+
     def test_extract_google_results(self) -> None:
         html = """
         <a href="/about/careers/applications/jobs/results/123-software-engineer">Software Engineer</a>
@@ -131,20 +147,35 @@ class SmokeTest(unittest.TestCase):
             queue = queue_path.read_text(encoding="utf-8")
             self.assertIn("snowflake-001", queue)
 
+    def test_orchestrator_approve_and_apply_flow(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            paths = self.make_paths(tmp)
+            paths.profile.write_text((ROOT / "data/profile.json").read_text(encoding="utf-8"), encoding="utf-8")
+            paths.sample_jobs.write_text((ROOT / "data/jobs.sample.json").read_text(encoding="utf-8"), encoding="utf-8")
+            orchestrator = JobSearchOrchestrator(WorkflowStore(paths))
+
+            with patch(
+                "job_agent.orchestration.collect_live_jobs",
+                return_value=[],
+            ):
+                orchestrator.run_search(["data engineer"], ["Snowflake"], 10)
+
+            approved = orchestrator.approve_job("snowflake-001")
+            self.assertEqual(approved["resume_status"], "ready")
+            self.assertTrue(Path(approved["resume_draft_path"]).exists())
+
+            applied = orchestrator.apply_job("snowflake-001")
+            self.assertEqual(applied["apply_status"], "sent")
+            self.assertTrue(Path(applied["application_packet_path"]).exists())
+
     def test_web_app_home_and_run_search(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             tmp = Path(tmpdir)
-            profile_path = tmp / "profile.json"
-            jobs_path = tmp / "jobs.json"
-            shortlist_path = tmp / "shortlist.json"
-            queue_path = tmp / "queue.json"
-            approved_path = tmp / "approved.json"
-            markdown_path = tmp / "shortlist.md"
-            live_jobs_path = tmp / "live-jobs.json"
-
-            profile_path.write_text((ROOT / "data/profile.json").read_text(encoding="utf-8"), encoding="utf-8")
-            jobs_path.write_text((ROOT / "data/jobs.sample.json").read_text(encoding="utf-8"), encoding="utf-8")
-            approved_path.write_text("[]\n", encoding="utf-8")
+            paths = self.make_paths(tmp)
+            paths.profile.write_text((ROOT / "data/profile.json").read_text(encoding="utf-8"), encoding="utf-8")
+            paths.sample_jobs.write_text((ROOT / "data/jobs.sample.json").read_text(encoding="utf-8"), encoding="utf-8")
+            paths.approved.write_text("[]\n", encoding="utf-8")
 
             statuses = []
             live_jobs = [
@@ -165,23 +196,14 @@ class SmokeTest(unittest.TestCase):
             def start_response(status, headers):  # noqa: ANN001,ANN202
                 statuses.append((status, headers))
 
+            orchestrator = JobSearchOrchestrator(WorkflowStore(paths))
+
             def fake_collect_live_jobs(out_path, job_titles, companies, limit_per_company):  # noqa: ANN001,ANN202
                 Path(out_path).write_text(json.dumps(live_jobs), encoding="utf-8")
                 return live_jobs
 
-            with patch.object(web, "DEFAULT_PROFILE", profile_path), patch.object(
-                web, "DEFAULT_JOBS", jobs_path
-            ), patch.object(web, "DEFAULT_SHORTLIST", shortlist_path), patch.object(
-                web, "DEFAULT_QUEUE", queue_path
-            ), patch.object(
-                web, "DEFAULT_APPROVED", approved_path
-            ), patch.object(
-                web, "DEFAULT_LIVE_JOBS", live_jobs_path
-            ), patch.object(
-                web, "DEFAULT_MARKDOWN", markdown_path
-            ), patch.object(
-                web,
-                "collect_live_jobs",
+            with patch.object(web, "build_orchestrator", return_value=orchestrator), patch(
+                "job_agent.orchestration.collect_live_jobs",
                 side_effect=fake_collect_live_jobs,
             ):
                 response = b"".join(
@@ -214,8 +236,25 @@ class SmokeTest(unittest.TestCase):
                 headers = dict(statuses[0][1])
                 self.assertIn("/?message=", headers["Location"])
 
-                queue_payload = json.loads(queue_path.read_text(encoding="utf-8"))
+                queue_payload = json.loads(paths.queue.read_text(encoding="utf-8"))
                 self.assertEqual(queue_payload[0]["id"], "snowflake-001")
+                self.assertEqual(queue_payload[0]["resume_status"], "idle")
+
+                statuses.clear()
+                approve_body = b"job_id=snowflake-001"
+                application(
+                    {
+                        "REQUEST_METHOD": "POST",
+                        "PATH_INFO": "/approve-job",
+                        "CONTENT_LENGTH": str(len(approve_body)),
+                        "QUERY_STRING": "",
+                        "wsgi.input": BytesIO(approve_body),
+                    },
+                    start_response,
+                )
+                self.assertEqual(statuses[0][0], "303 See Other")
+                updated_queue = json.loads(paths.queue.read_text(encoding="utf-8"))
+                self.assertEqual(updated_queue[0]["resume_status"], "ready")
 
     def test_collect_live_jobs_command_invokes_collector(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
