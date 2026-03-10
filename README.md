@@ -1,4 +1,4 @@
-# Job Application Approval Agent
+# Job Search Agent
 
 This repository contains a GitHub-ready local project for finding relevant jobs at NVIDIA, Databricks, Snowflake, and Google, ranking them against your profile, and stopping at a human approval gate before any application is submitted.
 

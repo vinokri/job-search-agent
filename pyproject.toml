@@ -1,7 +1,7 @@
 [project]
-name = "job-application-approval-agent"
+name = "job-search-agent"
 version = "0.1.0"
-description = "Shortlist jobs from target companies and stop at approval before application submission."
+description = "Search target-company jobs, rank them against a candidate profile, and stop at approval."
 requires-python = ">=3.10"
 
 [tool.setuptools]
