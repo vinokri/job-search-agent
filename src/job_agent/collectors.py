@@ -15,6 +15,7 @@ from .models import dump_json
 USER_AGENT = "job-search-agent/0.1 (+https://github.com/vinokri/job-search-agent)"
 WORKDAY_NVIDIA_JOBS = "https://nvidia.wd5.myworkdayjobs.com/wday/cxs/nvidia/NVIDIAExternalCareerSite/jobs"
 NVIDIA_RESULTS = "https://www.nvidia.com/en-us/about-nvidia/careers/"
+NVIDIA_SEARCH_API = "https://jobs.nvidia.com/api/pcsx/search"
 GOOGLE_RESULTS = "https://www.google.com/about/careers/applications/jobs/results"
 SNOWFLAKE_RESULTS = "https://careers.snowflake.com/us/en/search-results"
 SNOWFLAKE_SITEMAP = "https://careers.snowflake.com/sitemap.xml"
@@ -166,54 +167,62 @@ def collect_nvidia_jobs_with_diagnostics(job_titles: list[str] | None, limit: in
     }
     queries = job_titles or [""]
     for search_text in queries:
-        url = NVIDIA_RESULTS
+        query_params = {"domain": "nvidia.com"}
         if search_text:
-            url = f"{NVIDIA_RESULTS}?keyword={quote_plus(search_text)}"
+            query_params["query"] = search_text
+        url = f"{NVIDIA_SEARCH_API}?{quote_plus('domain')}={quote_plus(query_params['domain'])}"
+        if search_text:
+            url += f"&{quote_plus('query')}={quote_plus(search_text)}"
         try:
             response = fetch_url(url)
         except (HTTPError, URLError) as exc:
             diagnostics["status"] = "error"
             diagnostics["error"] = str(exc)
             continue
-        diagnostics["response_type"] = "html"
-        diagnostics["response_preview"] = preview_text(re.sub(r"<[^>]+>", " ", response))
-        links = re.findall(
-            r'href="(https://nvidia\.wd5\.myworkdayjobs\.com/en-US/NVIDIAExternalCareerSite/job/[^"]+|/en-us/about-nvidia/careers/job-search/[^"]+)"',
-            response,
-            flags=re.IGNORECASE,
-        )
-        normalized_links = [urljoin("https://www.nvidia.com", link) for link in links]
-        diagnostics["top_level_keys"] = ["html-links"]
+        diagnostics["response_type"] = "json"
+        diagnostics["response_preview"] = preview_text(response)
+        try:
+            payload = json.loads(response)
+        except json.JSONDecodeError:
+            diagnostics["status"] = "error"
+            diagnostics["error"] = "Invalid JSON response from NVIDIA search API"
+            continue
+        diagnostics["top_level_keys"] = list(payload.keys())
+        positions = payload.get("data", {}).get("positions", [])
+        diagnostics["top_level_keys"] = list(payload.get("data", {}).keys()) or diagnostics["top_level_keys"]
         diagnostics["sample_titles"] = []
-        for link in normalized_links[: max(limit * 2, 20)]:
-            try:
-                html = fetch_url(link)
-            except (HTTPError, URLError):
+        for position in positions:
+            title = normalize_whitespace(str(position.get("name", "")))
+            if not title or not title_matches(title, job_titles):
                 continue
-            posting = extract_jobposting_from_html(html, link, "NVIDIA")
-            if posting:
-                if title_matches(posting["title"], job_titles):
-                    collected.append(posting)
-                    diagnostics["sample_titles"].append(posting["title"])
-                continue
-            title = extract_meta_content(html, "property", "og:title") or normalize_whitespace(link.rsplit("/", 1)[-1].replace("-", " "))
-            description = extract_meta_content(html, "name", "description")
-            if title_matches(title, job_titles):
-                collected.append(
-                    {
-                        "id": f"nvidia-{slugify(title)}",
-                        "company": "NVIDIA",
-                        "title": title,
-                        "url": link,
-                        "location": "",
-                        "remote": "unknown",
-                        "employment_type": "full-time",
-                        "posted_at": "",
-                        "description": description,
-                        "skills": extract_skills_from_text(" ".join([title, description])),
-                    }
-                )
-                diagnostics["sample_titles"].append(title)
+            url = urljoin("https://jobs.nvidia.com", str(position.get("positionUrl", "")))
+            locations = position.get("standardizedLocations") or position.get("locations") or []
+            location = normalize_whitespace(", ".join(locations[:3])) if isinstance(locations, list) else normalize_whitespace(str(locations))
+            work_location = normalize_whitespace(str(position.get("workLocationOption", ""))).lower()
+            if "remote" in work_location:
+                remote = "remote"
+            elif work_location:
+                remote = work_location
+            else:
+                remote = "unknown"
+            department = normalize_whitespace(str(position.get("department", "")))
+            display_job_id = normalize_whitespace(str(position.get("displayJobId", "")))
+            description = normalize_whitespace(" ".join(part for part in [department, display_job_id] if part))
+            collected.append(
+                {
+                    "id": f"nvidia-{position.get('id') or slugify(title)}",
+                    "company": "NVIDIA",
+                    "title": title,
+                    "url": url,
+                    "location": location,
+                    "remote": remote,
+                    "employment_type": "full-time",
+                    "posted_at": str(position.get("postedTs", "")),
+                    "description": description,
+                    "skills": extract_skills_from_text(" ".join([title, description])),
+                }
+            )
+            diagnostics["sample_titles"].append(title)
     unique = unique_jobs(collected)[:limit]
     diagnostics["jobs_collected"] = len(unique)
     return unique, diagnostics

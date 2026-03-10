@@ -8,7 +8,11 @@ from pathlib import Path
 from unittest.mock import patch
 
 from job_agent.cli import main
-from job_agent.collectors import extract_google_results, extract_jobposting_from_html
+from job_agent.collectors import (
+    collect_nvidia_jobs_with_diagnostics,
+    extract_google_results,
+    extract_jobposting_from_html,
+)
 from job_agent.orchestration import JobSearchOrchestrator, WorkflowPaths, WorkflowStore
 from job_agent.queue import export_approved, seed_queue, update_status
 from job_agent.resume import parse_resume_structure
@@ -72,6 +76,40 @@ class SmokeTest(unittest.TestCase):
         assert job is not None
         self.assertEqual(job["title"], "Staff Data Engineer")
         self.assertIn("python", job["skills"])
+
+    def test_collect_nvidia_jobs_uses_public_api(self) -> None:
+        payload = json.dumps(
+            {
+                "status": 200,
+                "error": {"message": "", "body": ""},
+                "data": {
+                    "positions": [
+                        {
+                            "id": 893391832799,
+                            "displayJobId": "JR2006328",
+                            "name": "Senior Solutions Architect - Simulation",
+                            "locations": ["US, CA, Santa Clara"],
+                            "standardizedLocations": ["Santa Clara, CA, US"],
+                            "postedTs": 1767916800,
+                            "department": "Architect, Solutions",
+                            "workLocationOption": "remote_local",
+                            "positionUrl": "/careers/job/893391832799",
+                        }
+                    ],
+                    "count": 1,
+                },
+            }
+        )
+
+        with patch("job_agent.collectors.fetch_url", return_value=payload) as mocked_fetch:
+            jobs, diagnostics = collect_nvidia_jobs_with_diagnostics(["Senior Solutions Architect"], limit=10)
+
+        self.assertEqual(len(jobs), 1)
+        self.assertEqual(jobs[0]["company"], "NVIDIA")
+        self.assertEqual(jobs[0]["remote"], "remote")
+        self.assertEqual(diagnostics["response_type"], "json")
+        self.assertIn("positions", diagnostics["top_level_keys"])
+        self.assertEqual(mocked_fetch.call_count, 1)
 
     def test_parse_resume_structure(self) -> None:
         text = """Vinodh Krishnamoorthy
