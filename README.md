@@ -6,6 +6,7 @@ The current implementation is intentionally conservative:
 
 - it builds a structured candidate profile from your LinkedIn URL and resume path
 - it normalizes job records from official careers pages
+- it can fetch live openings from supported company career sources
 - it scores and shortlists jobs against your profile
 - it manages an approval queue so automation stops before submission
 
@@ -34,6 +35,7 @@ Current limitation:
 ├── Dockerfile
 ├── data/
 │   ├── approved-jobs.json
+│   ├── jobs.live.json
 │   ├── jobs.sample.json
 │   ├── profile.json
 │   ├── review-queue.json
@@ -43,6 +45,7 @@ Current limitation:
 │   ├── __init__.py
 │   ├── __main__.py
 │   ├── cli.py
+│   ├── collectors.py
 │   ├── models.py
 │   ├── queue.py
 │   ├── shortlist.py
@@ -63,6 +66,7 @@ Current limitation:
 8. Added sample data and generated sample shortlist outputs.
 9. Added a smoke test to verify the main CLI flow.
 10. Added a dependency-free web UI and container deployment files.
+11. Added a live job collector and cache file for supported company career sources.
 
 ## Workflow
 
@@ -136,6 +140,30 @@ This command:
 - writes the ranked shortlist
 - seeds the review queue with `pending` items
 
+To collect live jobs first, use:
+
+```bash
+PYTHONPATH=src python3 -m job_agent run-search \
+  --profile data/profile.json \
+  --jobs data/jobs.live.json \
+  --shortlist-out data/shortlist.json \
+  --queue-out data/review-queue.json \
+  --markdown data/shortlist.md \
+  --collect-live \
+  --live-jobs-out data/jobs.live.json \
+  --job-title "software engineer" \
+  --company "NVIDIA"
+```
+
+Or collect live jobs separately:
+
+```bash
+PYTHONPATH=src python3 -m job_agent collect-live-jobs \
+  --out data/jobs.live.json \
+  --job-title "software engineer" \
+  --company "Google"
+```
+
 ### 5. Seed the approval queue manually
 
 ```bash
@@ -180,6 +208,7 @@ Then open [http://127.0.0.1:8000](http://127.0.0.1:8000).
 The UI supports:
 
 - running the search with up to 3 job titles and up to 5 company filters
+- collecting live jobs into `data/jobs.live.json` before scoring
 - viewing the ranked shortlist
 - approving, holding, or rejecting jobs from the review queue
 - exporting the approved jobs list

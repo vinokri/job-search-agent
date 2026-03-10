@@ -6,6 +6,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, quote_plus
 from wsgiref.simple_server import make_server
 
+from .collectors import collect_live_jobs
 from .queue import export_approved, update_status
 from .shortlist import build_shortlist
 
@@ -14,6 +15,7 @@ ROOT = Path(__file__).resolve().parents[2]
 DATA_DIR = ROOT / "data"
 DEFAULT_PROFILE = DATA_DIR / "profile.json"
 DEFAULT_JOBS = DATA_DIR / "jobs.sample.json"
+DEFAULT_LIVE_JOBS = DATA_DIR / "jobs.live.json"
 DEFAULT_SHORTLIST = DATA_DIR / "shortlist.json"
 DEFAULT_QUEUE = DATA_DIR / "review-queue.json"
 DEFAULT_APPROVED = DATA_DIR / "approved-jobs.json"
@@ -305,7 +307,8 @@ def render_home(message: str = "") -> bytes:
       <div class="panel">
         <h2>Current files</h2>
         <p class="muted">Profile: {html_escape(display_path(DEFAULT_PROFILE))}</p>
-        <p class="muted">Jobs input: {html_escape(display_path(DEFAULT_JOBS))}</p>
+        <p class="muted">Sample jobs: {html_escape(display_path(DEFAULT_JOBS))}</p>
+        <p class="muted">Live jobs cache: {html_escape(display_path(DEFAULT_LIVE_JOBS))}</p>
         <p class="muted">Shortlist: {html_escape(display_path(DEFAULT_SHORTLIST))}</p>
         <p class="muted">Queue: {html_escape(display_path(DEFAULT_QUEUE))}</p>
         <p class="muted">Approved export: {html_escape(display_path(DEFAULT_APPROVED))}</p>
@@ -432,9 +435,11 @@ def redirect(start_response, location: str) -> list[bytes]:
 def handle_run_search(form: dict[str, list[str]]) -> str:
     job_titles = parse_multi_value(form, "job_title", 3)
     companies = parse_multi_value(form, "company", 5)
+    live_jobs = collect_live_jobs(str(DEFAULT_LIVE_JOBS), job_titles or None, companies or None, 20)
+    jobs_path = DEFAULT_LIVE_JOBS if live_jobs else DEFAULT_JOBS
     build_shortlist(
         str(DEFAULT_PROFILE),
-        str(DEFAULT_JOBS),
+        str(jobs_path),
         str(DEFAULT_SHORTLIST),
         str(DEFAULT_MARKDOWN),
         25,
@@ -444,7 +449,8 @@ def handle_run_search(form: dict[str, list[str]]) -> str:
     from .queue import seed_queue
 
     seed_queue(str(DEFAULT_SHORTLIST), str(DEFAULT_QUEUE))
-    return "Search completed. Shortlist and review queue refreshed."
+    source = "live company career pages" if live_jobs else "the sample job file"
+    return f"Search completed using {source}. Shortlist and review queue refreshed."
 
 
 def handle_set_status(form: dict[str, list[str]]) -> str:

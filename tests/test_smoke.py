@@ -8,6 +8,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from job_agent.cli import main
+from job_agent.collectors import extract_google_results, extract_jobposting_from_html
 from job_agent.queue import export_approved, seed_queue, update_status
 from job_agent.shortlist import build_shortlist
 from job_agent import web
@@ -18,6 +19,41 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class SmokeTest(unittest.TestCase):
+    def test_extract_google_results(self) -> None:
+        html = """
+        <a href="/about/careers/applications/jobs/results/123-software-engineer">Software Engineer</a>
+        <a href="/about/careers/applications/jobs/results/456-data-engineer">Data Engineer</a>
+        """
+        jobs = extract_google_results(html)
+        self.assertEqual(len(jobs), 2)
+        self.assertEqual(jobs[0]["company"], "Google")
+
+    def test_extract_jobposting_from_html(self) -> None:
+        html = """
+        <script type="application/ld+json">
+        {
+          "@context": "https://schema.org",
+          "@type": "JobPosting",
+          "title": "Staff Data Engineer",
+          "description": "Build Python, SQL, and Spark data systems.",
+          "datePosted": "2026-03-09",
+          "jobLocation": {
+            "@type": "Place",
+            "address": {
+              "addressLocality": "San Francisco",
+              "addressRegion": "CA",
+              "addressCountry": "US"
+            }
+          }
+        }
+        </script>
+        """
+        job = extract_jobposting_from_html(html, "https://example.com/job", "Databricks")
+        self.assertIsNotNone(job)
+        assert job is not None
+        self.assertEqual(job["title"], "Staff Data Engineer")
+        self.assertIn("python", job["skills"])
+
     def test_shortlist_and_queue_flow(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             tmp = Path(tmpdir)
@@ -104,15 +140,34 @@ class SmokeTest(unittest.TestCase):
             queue_path = tmp / "queue.json"
             approved_path = tmp / "approved.json"
             markdown_path = tmp / "shortlist.md"
+            live_jobs_path = tmp / "live-jobs.json"
 
             profile_path.write_text((ROOT / "data/profile.json").read_text(encoding="utf-8"), encoding="utf-8")
             jobs_path.write_text((ROOT / "data/jobs.sample.json").read_text(encoding="utf-8"), encoding="utf-8")
             approved_path.write_text("[]\n", encoding="utf-8")
 
             statuses = []
+            live_jobs = [
+                {
+                    "id": "snowflake-001",
+                    "company": "Snowflake",
+                    "title": "Data Engineer",
+                    "url": "https://example.com/snowflake-001",
+                    "location": "Remote",
+                    "remote": "remote",
+                    "employment_type": "full-time",
+                    "posted_at": "2026-03-09",
+                    "description": "Python SQL Spark",
+                    "skills": ["python", "sql", "spark"],
+                }
+            ]
 
             def start_response(status, headers):  # noqa: ANN001,ANN202
                 statuses.append((status, headers))
+
+            def fake_collect_live_jobs(out_path, job_titles, companies, limit_per_company):  # noqa: ANN001,ANN202
+                Path(out_path).write_text(json.dumps(live_jobs), encoding="utf-8")
+                return live_jobs
 
             with patch.object(web, "DEFAULT_PROFILE", profile_path), patch.object(
                 web, "DEFAULT_JOBS", jobs_path
@@ -121,7 +176,13 @@ class SmokeTest(unittest.TestCase):
             ), patch.object(
                 web, "DEFAULT_APPROVED", approved_path
             ), patch.object(
+                web, "DEFAULT_LIVE_JOBS", live_jobs_path
+            ), patch.object(
                 web, "DEFAULT_MARKDOWN", markdown_path
+            ), patch.object(
+                web,
+                "collect_live_jobs",
+                side_effect=fake_collect_live_jobs,
             ):
                 response = b"".join(
                     application(
@@ -155,6 +216,28 @@ class SmokeTest(unittest.TestCase):
 
                 queue_payload = json.loads(queue_path.read_text(encoding="utf-8"))
                 self.assertEqual(queue_payload[0]["id"], "snowflake-001")
+
+    def test_collect_live_jobs_command_invokes_collector(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out_path = Path(tmpdir) / "live.json"
+
+            with patch("job_agent.cli.collect_live_jobs") as mocked:
+                with patch(
+                    "sys.argv",
+                    [
+                        "job_agent",
+                        "collect-live-jobs",
+                        "--out",
+                        str(out_path),
+                        "--job-title",
+                        "software engineer",
+                        "--company",
+                        "Google",
+                    ],
+                ):
+                    main()
+
+            mocked.assert_called_once()
 
 
 if __name__ == "__main__":

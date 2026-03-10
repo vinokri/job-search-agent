@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 
+from .collectors import collect_live_jobs
 from .queue import export_approved, seed_queue, update_status
 from .shortlist import build_shortlist
 from .web import serve_ui
@@ -58,6 +59,8 @@ def build_parser() -> argparse.ArgumentParser:
     run_parser.add_argument("--queue-out", required=True)
     run_parser.add_argument("--markdown")
     run_parser.add_argument("--limit", type=int, default=25)
+    run_parser.add_argument("--collect-live", action="store_true")
+    run_parser.add_argument("--live-jobs-out")
     run_parser.add_argument(
         "--job-title",
         dest="job_titles",
@@ -87,6 +90,27 @@ def build_parser() -> argparse.ArgumentParser:
     export_parser.add_argument("--queue", required=True)
     export_parser.add_argument("--out", required=True)
 
+    live_parser = subparsers.add_parser(
+        "collect-live-jobs",
+        help="Fetch live jobs from the supported company career sites.",
+    )
+    live_parser.add_argument("--out", required=True)
+    live_parser.add_argument("--limit-per-company", type=int, default=20)
+    live_parser.add_argument(
+        "--job-title",
+        dest="job_titles",
+        action="append",
+        type=lambda value: limited_list(value, "job title", 3),
+        help="Job title filter. Repeat up to 3 times.",
+    )
+    live_parser.add_argument(
+        "--company",
+        dest="companies",
+        action="append",
+        type=lambda value: limited_list(value, "company", 5),
+        help="Company filter. Repeat up to 5 times.",
+    )
+
     serve_parser = subparsers.add_parser("serve-ui", help="Run the local web UI.")
     serve_parser.add_argument("--host", default="127.0.0.1")
     serve_parser.add_argument("--port", type=int, default=8000)
@@ -112,9 +136,14 @@ def main() -> None:
         return
     if args.command == "run-search":
         validate_runtime_filters(parser, args.job_titles, args.companies)
+        jobs_path = args.jobs
+        if args.collect_live:
+            live_out = args.live_jobs_out or args.jobs
+            collect_live_jobs(live_out, args.job_titles, args.companies, args.limit)
+            jobs_path = live_out
         build_shortlist(
             args.profile,
-            args.jobs,
+            jobs_path,
             args.shortlist_out,
             args.markdown,
             args.limit,
@@ -131,6 +160,10 @@ def main() -> None:
         return
     if args.command == "export-approved":
         export_approved(args.queue, args.out)
+        return
+    if args.command == "collect-live-jobs":
+        validate_runtime_filters(parser, args.job_titles, args.companies)
+        collect_live_jobs(args.out, args.job_titles, args.companies, args.limit_per_company)
         return
     if args.command == "serve-ui":
         serve_ui(args.host, args.port)
