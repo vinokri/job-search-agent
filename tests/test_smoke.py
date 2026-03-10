@@ -40,6 +40,7 @@ class SmokeTest(unittest.TestCase):
             resume_sources=tmp / "source-resumes",
             resume_drafts=tmp / "resume-drafts",
             application_packets=tmp / "application-packets",
+            application_runs=tmp / "application-runs",
         )
 
     def test_extract_google_results(self) -> None:
@@ -223,10 +224,10 @@ MS Computer Science
                 return_value=(
                     [],
                     {
-                        "Snowflake": {
+                        "Google": {
                             "status": "ok",
                             "jobs_collected": 0,
-                            "requested_titles": ["data engineer"],
+                            "requested_titles": ["software engineer"],
                             "response_type": "html",
                             "top_level_keys": [],
                             "response_preview": "empty",
@@ -235,20 +236,25 @@ MS Computer Science
                     },
                 ),
             ):
-                result = orchestrator.run_search(["data engineer"], ["Snowflake"], 10)
+                result = orchestrator.run_search(["software engineer"], ["Google"], 10)
             self.assertIn("diagnostics", result)
 
-            approved = orchestrator.approve_job("snowflake-001")
+            approved = orchestrator.approve_job("google-001")
             self.assertEqual(approved["resume_status"], "draft_ready")
             self.assertTrue(Path(approved["resume_draft_path"]).exists())
             self.assertTrue(Path(approved["selected_resume_path"]).exists())
 
-            resume_approved = orchestrator.approve_resume("snowflake-001")
+            resume_approved = orchestrator.approve_resume("google-001")
             self.assertEqual(resume_approved["resume_status"], "approved")
 
-            applied = orchestrator.apply_job("snowflake-001")
-            self.assertEqual(applied["apply_status"], "sent")
+            with patch("job_agent.ats.playwright_python_available", return_value=True):
+                applied = orchestrator.apply_job("google-001")
+            self.assertEqual(applied["apply_status"], "browser_ready")
             self.assertTrue(Path(applied["application_packet_path"]).exists())
+            self.assertTrue(Path(applied["application_run_path"]).exists())
+
+            submitted = orchestrator.mark_submitted("google-001")
+            self.assertEqual(submitted["apply_status"], "submitted")
 
     def test_web_app_home_and_run_search(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

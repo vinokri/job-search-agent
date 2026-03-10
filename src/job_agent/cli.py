@@ -104,6 +104,12 @@ def build_parser() -> argparse.ArgumentParser:
     apply_parser = subparsers.add_parser("apply-job", help="Trigger the apply agent for an approved job.")
     apply_parser.add_argument("--job-id", required=True)
 
+    mark_submitted_parser = subparsers.add_parser(
+        "mark-submitted",
+        help="Confirm that the external ATS submission was completed after browser review.",
+    )
+    mark_submitted_parser.add_argument("--job-id", required=True)
+
     resume_source_parser = subparsers.add_parser(
         "parse-resume-source",
         help="Parse a resume source file into structured editable content.",
@@ -190,6 +196,9 @@ def main() -> None:
         return
     if args.command == "apply-job":
         orchestrator.apply_job(args.job_id)
+        return
+    if args.command == "mark-submitted":
+        orchestrator.mark_submitted(args.job_id)
         return
     if args.command == "parse-resume-source":
         orchestrator.refresh_resume_source(args.resume_path)

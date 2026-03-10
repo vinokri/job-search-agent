@@ -1,29 +1,106 @@
 # Job Search Agent
 
-This repository contains a GitHub-ready local project for finding relevant jobs at NVIDIA, Databricks, Snowflake, and Google, ranking them against your profile, and stopping at a human approval gate before any application is submitted.
+This project is a multi-agent job workflow for:
 
-The current implementation is an orchestrated multi-agent workflow:
+- collecting live jobs from NVIDIA, Databricks, Snowflake, and Google
+- ranking them against a structured candidate profile
+- approving a target role
+- generating a tailored resume for that role
+- preparing a browser-based ATS apply run
+- stopping before final submit until the user confirms it manually
 
-- `SearchJobAgent` collects live jobs, normalizes them, and builds the shortlist
-- `ResumeUpdateAgent` parses a source resume, rewrites a job-specific draft, and stages a tailored file for approval
-- `ApplyJobAgent` records the apply-ready packet and uses the latest approved tailored resume file
-- `JobSearchOrchestrator` coordinates agent transitions, shared state, and memory
-- runtime state and agent memory are stored in JSON so the UI and CLI share the same workflow state
+The system is intentionally human-in-the-loop. It automates search, ranking, resume preparation, and browser apply setup, but the final ATS submission remains a separate explicit confirmation step.
 
-External ATS form submission is still intentionally out of scope. The `ApplyJobAgent` records the internal apply packet and sent workflow state, but it does not submit to third-party application forms yet.
+## Architecture
 
-## Profile seeded for this project
+The current architecture is built around explicit orchestration and durable state:
 
-- Candidate: Vinodh Krishnamoorthy
-- LinkedIn: `https://www.linkedin.com/in/vinodh-krishnamoorthy-4859a999/`
-- Resume path: `/Users/vinodhkrishnamoorthy/Downloads/vinodh-krishnamoorthy-standard-resume (12) (1).pdf`
-- Target companies: NVIDIA, Databricks, Snowflake, Google
+- `SearchJobAgent`
+  - collects live jobs
+  - normalizes them into a common schema
+  - builds the shortlist
+- `ResumeSourceManager`
+  - owns source resume ingestion
+  - copies uploaded/selected source files into `data/source-resumes/`
+  - builds canonical resume artifacts where possible
+- `ResumeUpdateAgent`
+  - runs after a job is approved
+  - prepares a job-specific tailored draft
+- `ResumeRenderAgent`
+  - renders tailored Markdown
+  - attempts tailored DOCX and PDF outputs
+- `ApplyJobAgent`
+  - prepares an external apply packet
+  - creates a browser apply run
+  - selects the ATS adapter
+- `ATSAdapter`
+  - provider interface for company-specific apply flows
+  - first provider implemented: Google
+- `ApplicationRunStore`
+  - stores apply-run metadata, screenshots, launcher scripts, and errors
+- `JobSearchOrchestrator`
+  - coordinates the state machine across all agents
 
-Current limitation:
+The project does not use an external orchestration framework. The orchestration layer is custom Python in [orchestration.py](/Users/vinodhkrishnamoorthy/Documents/New%20project/src/job_agent/orchestration.py).
 
-- The LinkedIn URL is stored in the profile, but this repository does not scrape LinkedIn directly.
-- Resume parsing is best-effort. Text, Markdown, HTML, and many DOCX/RTF inputs are handled well; PDF parsing uses a lightweight text-extraction fallback.
-- Tailored resume output is always generated as Markdown. DOCX generation is attempted when `textutil` is available on the host.
+## Current state model
+
+Each job in runtime tracks:
+
+- `review_status`
+- `resume_status`
+- `apply_status`
+- `resume_preview_path`
+- `resume_draft_path`
+- `rendered_resume_docx_path`
+- `rendered_resume_pdf_path`
+- `selected_resume_path`
+- `application_packet_path`
+- `application_run_id`
+- `application_run_path`
+- `apply_provider`
+- `apply_launch_command`
+
+Shared runtime lives in [agent-runtime.json](/Users/vinodhkrishnamoorthy/Documents/New%20project/data/agent-runtime.json). Append-only memory lives in [agent-memory.json](/Users/vinodhkrishnamoorthy/Documents/New%20project/data/agent-memory.json).
+
+## Resume pipeline
+
+The improved resume flow is:
+
+1. Select or upload a source resume.
+2. `ResumeSourceManager` parses it into [resume-structured.json](/Users/vinodhkrishnamoorthy/Documents/New%20project/data/resume-structured.json).
+3. The source is copied into [source-resumes](/Users/vinodhkrishnamoorthy/Documents/New%20project/data/source-resumes).
+4. Canonical artifacts are created when possible:
+   - `*.canonical.md`
+   - `*.canonical.docx`
+   - `*.canonical.pdf`
+5. When a job is approved, `ResumeUpdateAgent` and `ResumeRenderAgent` generate:
+   - `data/resume-drafts/<job-id>.md`
+   - `data/resume-drafts/<job-id>.docx` when supported
+   - `data/resume-drafts/<job-id>.pdf` when supported
+6. After `Approve Resume`, the preferred artifact is stored in `selected_resume_path`.
+
+Design choice:
+
+- PDF is treated as an output artifact, not the primary editable format.
+- The editable system representation is the structured resume JSON plus generated Markdown/DOCX.
+
+## External ATS flow
+
+The external apply flow is now browser-oriented.
+
+1. `Apply In Browser` prepares the application packet.
+2. The system selects an ATS adapter for the company.
+3. It creates an application run under [application-runs](/Users/vinodhkrishnamoorthy/Documents/New%20project/data/application-runs).
+4. For Google, it writes a Playwright-compatible launcher script and a local launch command.
+5. The browser run is intended to stop before final submit.
+6. After you manually complete the external ATS submit, you click `Mark Submitted`.
+
+This means:
+
+- internal workflow automation is complete
+- external browser assistance is prepared
+- final submission is still a human decision
 
 ## Project structure
 
@@ -32,26 +109,24 @@ Current limitation:
 ├── README.md
 ├── run.sh
 ├── pyproject.toml
-├── .gitignore
-├── .dockerignore
 ├── Dockerfile
 ├── data/
 │   ├── approved-jobs.json
 │   ├── agent-memory.json
 │   ├── agent-runtime.json
 │   ├── application-packets/
+│   ├── application-runs/
 │   ├── jobs.live.json
 │   ├── jobs.sample.json
 │   ├── profile.json
 │   ├── resume-drafts/
 │   ├── resume-structured.json
 │   ├── review-queue.json
-│   ├── source-resumes/
 │   ├── shortlist.json
-│   └── shortlist.md
+│   ├── shortlist.md
+│   └── source-resumes/
 ├── src/job_agent/
-│   ├── __init__.py
-│   ├── __main__.py
+│   ├── ats.py
 │   ├── cli.py
 │   ├── collectors.py
 │   ├── models.py
@@ -64,66 +139,9 @@ Current limitation:
     └── test_smoke.py
 ```
 
-## What has been done
+## End-to-end flow
 
-1. Created a reusable skill for the broader job-hunt workflow under [`skills/job-hunt-apply`](/Users/vinodhkrishnamoorthy/Documents/New%20project/skills/job-hunt-apply).
-2. Created this repository structure for a standalone GitHub project.
-3. Seeded your profile data with your LinkedIn URL, resume path, and target companies.
-4. Left `experience` empty in `data/profile.json` so it can be filled accurately from your resume or manual edits rather than inventing details.
-5. Implemented deterministic job scoring based on title fit, location fit, skill overlap, remote preference, and seniority signals.
-6. Implemented a review queue with `pending`, `approved`, `rejected`, and `hold` states.
-7. Added CLI commands so the workflow is repeatable and easy to document.
-8. Added sample data and generated sample shortlist outputs.
-9. Added a smoke test to verify the main CLI flow.
-10. Added a dependency-free web UI and container deployment files.
-11. Added a live job collector and cache file for supported company career sources.
-12. Added `run.sh` for one-command local startup.
-13. Refactored the workflow into explicit search, resume, and apply agents with orchestration, runtime state, and memory.
-14. Added resume source upload/selection, structured resume parsing, tailored draft generation, preview, and resume approval before apply.
-
-## Agent workflow
-
-### 1. SearchJobAgent
-
-- collects live jobs from supported company sources
-- writes `data/jobs.live.json`
-- builds the shortlist
-- seeds the current review queue
-- updates `data/agent-runtime.json`
-- appends search events to `data/agent-memory.json`
-
-### 2. ResumeUpdateAgent
-
-- parses the selected/uploaded source resume into `data/resume-structured.json`
-- runs only after a job is approved
-- creates a tailored resume draft in `data/resume-drafts/<job-id>.md`
-- attempts a DOCX output in `data/resume-drafts/<job-id>.docx` when supported
-- updates the job state to `resume_status = draft_ready`
-- appends resume events to `data/agent-memory.json`
-
-### 3. ApplyJobAgent
-
-- runs only after approval and resume approval
-- creates an application packet in `data/application-packets/<job-id>.json`
-- records the exact tailored resume file path selected for the application
-- updates the job state to `apply_status = sent`
-- appends apply events to `data/agent-memory.json`
-
-### 4. JobSearchOrchestrator
-
-- owns the shared workflow transitions
-- ensures agents run in the correct order
-- keeps runtime state durable across UI and CLI usage
-
-## Workflow
-
-### 1. Update your profile
-
-Edit `data/profile.json` and add any missing experience, skills, location preferences, or sponsorship constraints.
-
-### 2. Parse your source resume
-
-You can either point the system at an existing local resume path or upload a file in the UI.
+### 1. Parse the source resume
 
 CLI:
 
@@ -132,79 +150,16 @@ PYTHONPATH=src python3 -m job_agent parse-resume-source \
   --resume-path "/absolute/path/to/resume.pdf"
 ```
 
-This step:
+This:
 
-- updates `candidate.resume_path` in `data/profile.json`
-- extracts text from the source resume
-- writes structured editable content to `data/resume-structured.json`
+- updates `candidate.resume_path` in [profile.json](/Users/vinodhkrishnamoorthy/Documents/New%20project/data/profile.json)
+- stores the source under [source-resumes](/Users/vinodhkrishnamoorthy/Documents/New%20project/data/source-resumes)
+- builds [resume-structured.json](/Users/vinodhkrishnamoorthy/Documents/New%20project/data/resume-structured.json)
+- creates canonical Markdown and best-effort DOCX/PDF artifacts
 
-### 3. Collect jobs from official career sites
+### 2. Run search
 
-Normalize jobs into `data/jobs.sample.json` or another JSON file using this shape:
-
-```json
-[
-  {
-    "id": "nvidia-123",
-    "company": "NVIDIA",
-    "title": "Senior Software Engineer",
-    "url": "https://example.com/job",
-    "location": "Santa Clara, CA, USA",
-    "remote": "hybrid",
-    "employment_type": "full-time",
-    "posted_at": "2026-03-09",
-    "description": "Role description here",
-    "skills": ["python", "sql", "distributed systems"]
-  }
-]
-```
-
-### 4. Generate the shortlist
-
-The `shortlist` command can now take runtime search parameters:
-
-- up to 3 `--job-title` inputs
-- up to 5 `--company` inputs
-
-If provided, these override the profile defaults for shortlist generation and also filter jobs before scoring.
-
-```bash
-python3 -m job_agent shortlist \
-  --profile data/profile.json \
-  --jobs data/jobs.sample.json \
-  --out data/shortlist.json \
-  --markdown data/shortlist.md \
-  --job-title "software engineer" \
-  --job-title "data engineer" \
-  --company "NVIDIA" \
-  --company "Snowflake"
-```
-
-### 5. Run the end-to-end search in one command
-
-If you want a single command that generates both the shortlist and the review queue, use `run-search`:
-
-```bash
-PYTHONPATH=src python3 -m job_agent run-search \
-  --profile data/profile.json \
-  --jobs data/jobs.sample.json \
-  --shortlist-out data/shortlist.json \
-  --queue-out data/review-queue.json \
-  --markdown data/shortlist.md \
-  --job-title "software engineer" \
-  --job-title "data engineer" \
-  --company "NVIDIA" \
-  --company "Snowflake"
-```
-
-This command:
-
-- filters the jobs by the provided titles and companies
-- scores the filtered jobs
-- writes the ranked shortlist
-- seeds the review queue with `pending` items
-
-To collect live jobs first, use:
+CLI:
 
 ```bash
 PYTHONPATH=src python3 -m job_agent run-search \
@@ -215,73 +170,72 @@ PYTHONPATH=src python3 -m job_agent run-search \
   --markdown data/shortlist.md \
   --collect-live \
   --live-jobs-out data/jobs.live.json \
-  --job-title "software engineer" \
-  --company "NVIDIA"
-```
-
-Or collect live jobs separately:
-
-```bash
-PYTHONPATH=src python3 -m job_agent collect-live-jobs \
-  --out data/jobs.live.json \
-  --job-title "software engineer" \
+  --job-title "senior solutions architect" \
   --company "Google"
 ```
 
-### 6. Seed the approval queue manually
+This:
 
-```bash
-python3 -m job_agent seed-queue \
-  --shortlist data/shortlist.json \
-  --out data/review-queue.json
-```
+- collects live jobs
+- stores them in [jobs.live.json](/Users/vinodhkrishnamoorthy/Documents/New%20project/data/jobs.live.json)
+- writes [shortlist.json](/Users/vinodhkrishnamoorthy/Documents/New%20project/data/shortlist.json)
+- writes [review-queue.json](/Users/vinodhkrishnamoorthy/Documents/New%20project/data/review-queue.json)
+- persists diagnostics in runtime
 
-Use this only if you want to separate shortlist generation from queue creation.
-
-### 7. Approve jobs and generate tailored resumes
-
-```bash
-PYTHONPATH=src python3 -m job_agent approve-job --job-id snowflake-001
-```
-
-This transition:
-
-1. marks the role approved
-2. runs `ResumeUpdateAgent`
-3. creates the tailored draft files
-4. updates runtime state and memory
-
-### 8. Preview and approve the tailored resume
+### 3. Approve the job
 
 CLI:
 
 ```bash
-PYTHONPATH=src python3 -m job_agent approve-resume --job-id snowflake-001
+PYTHONPATH=src python3 -m job_agent approve-job --job-id google-001
 ```
 
-In the UI, this is the `Approve Resume` button after the draft preview appears.
+This:
 
-### 9. Apply using the latest approved tailored resume
+- marks the role approved
+- triggers `ResumeUpdateAgent`
+- generates tailored resume outputs
+
+### 4. Approve the tailored resume
 
 CLI:
 
 ```bash
-PYTHONPATH=src python3 -m job_agent apply-job --job-id snowflake-001
+PYTHONPATH=src python3 -m job_agent approve-resume --job-id google-001
 ```
 
-This uses the latest `selected_resume_path` recorded in runtime state.
+This:
 
-### 10. Export only approved jobs
+- validates the tailored draft exists
+- locks in the preferred resume artifact through `selected_resume_path`
+
+### 5. Prepare the browser apply run
+
+CLI:
 
 ```bash
-python3 -m job_agent export-approved \
-  --queue data/review-queue.json \
-  --out data/approved-jobs.json
+PYTHONPATH=src python3 -m job_agent apply-job --job-id google-001
 ```
 
-At this point the internal workflow marks the application packet sent. External ATS form submission is still a separate future step.
+This:
 
-## Local UI
+- creates the application packet
+- creates the browser apply run
+- selects the adapter
+- writes the launch command into runtime
+- does not mark the application submitted yet
+
+### 6. Confirm final external submission
+
+CLI:
+
+```bash
+PYTHONPATH=src python3 -m job_agent mark-submitted --job-id google-001
+```
+
+Use this only after you complete the final ATS submit in the browser.
+
+## UI flow
 
 Fastest local start:
 
@@ -290,11 +244,7 @@ cd "/Users/vinodhkrishnamoorthy/Documents/New project"
 ./run.sh
 ```
 
-That starts the UI at [http://127.0.0.1:8000](http://127.0.0.1:8000).
-
 Manual equivalent:
-
-Run the browser UI:
 
 ```bash
 cd "/Users/vinodhkrishnamoorthy/Documents/New project"
@@ -305,51 +255,30 @@ Then open [http://127.0.0.1:8000](http://127.0.0.1:8000).
 
 The UI supports:
 
-- selecting an existing resume path or uploading a source resume file
-- parsing the resume into structured editable content
-- running the search with up to 3 job titles and up to 5 company filters
-- collecting live jobs into `data/jobs.live.json` before scoring
-- viewing the ranked shortlist
-- approving jobs, which triggers the resume update agent
-- previewing the tailored resume draft in the queue
-- approving the tailored resume before apply
-- applying jobs, which triggers the apply agent
-- viewing agent runtime and recent memory events
-- exporting the approved jobs list
+- selecting or uploading a resume source
+- parsing the resume into structured content
+- running a live search with up to 3 job titles and 5 companies
+- reviewing search diagnostics
+- approving jobs
+- previewing and approving tailored resumes
+- preparing browser apply runs
+- marking external submissions as completed
+- exporting approved jobs
 
-When you click `Run search` in the UI, it now tries to fetch live jobs first from the supported company sources. If no live jobs are collected for that query, it falls back to the local sample file.
-
-When you click `Approve`, the orchestrator:
-
-1. marks the job approved
-2. runs the resume update agent
-3. persists the new resume draft path and state
-
-When you click `Approve Resume`, the orchestrator:
-
-1. validates that a tailored draft exists
-2. marks that tailored file as the approved resume for the job
-3. persists `selected_resume_path` for the apply step
-
-When you click `Apply`, the orchestrator:
-
-1. validates that the job is approved
-2. validates that the tailored resume is approved
-3. runs the apply agent
-4. persists the application packet path, selected resume path, and sent state
-
-## CLI agent commands
+## Commands
 
 ```bash
 PYTHONPATH=src python3 -m job_agent parse-resume-source --resume-path /absolute/path/to/resume.pdf
-PYTHONPATH=src python3 -m job_agent approve-job --job-id snowflake-001
-PYTHONPATH=src python3 -m job_agent approve-resume --job-id snowflake-001
-PYTHONPATH=src python3 -m job_agent apply-job --job-id snowflake-001
+PYTHONPATH=src python3 -m job_agent approve-job --job-id google-001
+PYTHONPATH=src python3 -m job_agent approve-resume --job-id google-001
+PYTHONPATH=src python3 -m job_agent apply-job --job-id google-001
+PYTHONPATH=src python3 -m job_agent mark-submitted --job-id google-001
+PYTHONPATH=src python3 -m job_agent serve-ui --host 127.0.0.1 --port 8000
 ```
 
 ## Deployment
 
-This repo now includes a simple `Dockerfile`, so it can be containerized and deployed on any service that accepts a container image.
+This repo includes a [Dockerfile](/Users/vinodhkrishnamoorthy/Documents/New%20project/Dockerfile), so it can be deployed to a container host such as Render.
 
 Build locally:
 
@@ -363,16 +292,27 @@ Run locally with Docker:
 docker run --rm -p 8000:8000 job-search-agent
 ```
 
-The container starts the same UI at `http://127.0.0.1:8000`.
+Important note:
+
+- hosted environments like Render can prepare apply runs
+- browser automation should be launched on your local machine, not on the hosted container
 
 ## Local development
 
-Run the smoke test:
+Run tests:
 
 ```bash
 PYTHONPATH=src python3 -m unittest discover -s tests
 ```
 
-## GitHub status
+## Current limitations
 
-The repository is published at [vinokri/job-search-agent](https://github.com/vinokri/job-search-agent). Local pushes from this terminal still depend on GitHub authentication being available; GitHub Desktop remains the reliable push path on this machine.
+- Live collector parsing remains best-effort because career sites change frequently.
+- Google is the first ATS adapter wired into the browser apply architecture.
+- DOCX and PDF generation depend on tools available in the host runtime.
+- PDF source parsing is still fallback-grade compared with native DOCX parsing.
+- Hosted containers use ephemeral storage unless you add persistence.
+
+## GitHub
+
+The repository is published at [vinokri/job-search-agent](https://github.com/vinokri/job-search-agent).

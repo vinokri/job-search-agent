@@ -25,6 +25,7 @@ DEFAULT_MEMORY = DEFAULT_PATHS.memory
 DEFAULT_RESUME_STRUCTURED = DEFAULT_PATHS.resume_structured
 DEFAULT_RESUME_SOURCES = DEFAULT_PATHS.resume_sources
 DEFAULT_MARKDOWN = DEFAULT_PATHS.shortlist_markdown
+DEFAULT_APPLICATION_RUNS = DEFAULT_PATHS.application_runs
 
 
 def read_text(path: Path) -> str:
@@ -79,6 +80,7 @@ def build_orchestrator() -> JobSearchOrchestrator:
     paths.memory = DEFAULT_MEMORY
     paths.resume_structured = DEFAULT_RESUME_STRUCTURED
     paths.resume_sources = DEFAULT_RESUME_SOURCES
+    paths.application_runs = DEFAULT_APPLICATION_RUNS
     return JobSearchOrchestrator(WorkflowStore(paths))
 
 
@@ -329,7 +331,7 @@ def render_home(message: str = "") -> bytes:
         <div class="stats">
           <div class="stat"><strong>{len(shortlist)}</strong><span class="meta">Shortlisted jobs</span></div>
           <div class="stat"><strong>{sum(1 for item in queue if item.get("review_status") == "approved")}</strong><span class="meta">Approved roles</span></div>
-          <div class="stat"><strong>{sum(1 for item in queue if item.get("apply_status") == "sent")}</strong><span class="meta">Applications sent</span></div>
+          <div class="stat"><strong>{sum(1 for item in queue if item.get("apply_status") == "submitted")}</strong><span class="meta">Applications submitted</span></div>
         </div>
       </div>
       <div class="panel">
@@ -343,6 +345,7 @@ def render_home(message: str = "") -> bytes:
         <p class="muted">Agent runtime: {html_escape(display_path(DEFAULT_RUNTIME))}</p>
         <p class="muted">Agent memory: {html_escape(display_path(DEFAULT_MEMORY))}</p>
         <p class="muted">Structured resume: {html_escape(display_path(DEFAULT_RESUME_STRUCTURED))}</p>
+        <p class="muted">Application runs: {html_escape(display_path(DEFAULT_APPLICATION_RUNS))}</p>
         <p class="muted">Last search companies: {html_escape(', '.join(last_search.get('companies', [])) or 'profile defaults')}</p>
         <p class="muted">Last search source: {html_escape(last_search.get('jobs_source', 'unknown'))}</p>
       </div>
@@ -469,6 +472,10 @@ def render_queue_card(item: dict) -> str:
     apply = item.get("apply_status", "idle")
     resume_path = item.get("resume_draft_path", "")
     packet_path = item.get("application_packet_path", "")
+    run_path = item.get("application_run_path", "")
+    apply_command = item.get("apply_launch_command", "")
+    rendered_docx = item.get("rendered_resume_docx_path", "")
+    rendered_pdf = item.get("rendered_resume_pdf_path", "")
     preview = ""
     if resume_path and Path(resume_path).exists():
         preview = "\n".join(Path(resume_path).read_text(encoding="utf-8").splitlines()[:8])
@@ -478,7 +485,9 @@ def render_queue_card(item: dict) -> str:
   <p><strong>{html_escape(item.get("company", ""))}</strong> · Score {item.get("score", 0)} · Review {status_badge(review)}</p>
   <p class="muted"><a href="{html_escape(item.get("url", ""))}" target="_blank" rel="noreferrer">Open job</a></p>
   <p class="muted">Resume agent: {html_escape(resume)}{f" · Draft: {html_escape(resume_path)}" if resume_path else ""}</p>
+  <p class="muted">Rendered files: {html_escape(rendered_docx or 'no docx yet')} · {html_escape(rendered_pdf or 'no pdf yet')}</p>
   <p class="muted">Apply agent: {html_escape(apply)}{f" · Packet: {html_escape(packet_path)}" if packet_path else ""}</p>
+  <p class="muted">Apply run: {html_escape(run_path or 'not prepared yet')}</p>
   {f'<pre class="muted" style="white-space: pre-wrap; overflow-x: auto; background: rgba(19,35,59,0.04); padding: 12px; border-radius: 12px;">{html_escape(preview)}</pre>' if preview else ''}
   <form class="inline-form" method="post" action="/approve-job">
     <input type="hidden" name="job_id" value="{job_id}">
@@ -494,10 +503,17 @@ def render_queue_card(item: dict) -> str:
   </form>
   <form class="inline-form" method="post" action="/apply-job">
     <input type="hidden" name="job_id" value="{job_id}">
-    <input type="text" disabled value="{html_escape(item.get('last_agent', 'search-job-agent'))}">
-    <button type="submit" class="secondary">Apply</button>
+    <input type="text" disabled value="{html_escape(apply_command or 'Run locally after preparation')}">
+    <button type="submit" class="secondary">Apply In Browser</button>
     <button type="button" class="warning" disabled>Resume {html_escape(resume)}</button>
     <button type="button" disabled>{html_escape(apply)}</button>
+  </form>
+  <form class="inline-form" method="post" action="/mark-submitted">
+    <input type="hidden" name="job_id" value="{job_id}">
+    <input type="text" disabled value="{html_escape(item.get('apply_provider', 'no adapter'))}">
+    <button type="submit" class="secondary">Mark Submitted</button>
+    <button type="button" class="warning" disabled>Review before submit</button>
+    <button type="button" disabled>{html_escape(run_path or '')}</button>
   </form>
 </article>
 """
@@ -632,7 +648,15 @@ def handle_apply_job(form: dict[str, list[str]]) -> str:
     job_id = form.get("job_id", [""])[0]
     orchestrator = build_orchestrator()
     result = orchestrator.apply_job(job_id)
-    return f"Apply agent marked {job_id} sent and wrote {result.get('application_packet_path', '')}."
+    command = result.get("apply_launch_command", "")
+    return f"Browser apply prepared for {job_id}. Run locally: {command or 'Playwright runtime not available yet.'}"
+
+
+def handle_mark_submitted(form: dict[str, list[str]]) -> str:
+    job_id = form.get("job_id", [""])[0]
+    orchestrator = build_orchestrator()
+    result = orchestrator.mark_submitted(job_id)
+    return f"External submission confirmed for {job_id}. Packet: {result.get('application_packet_path', '')}."
 
 
 def handle_approve_resume(form: dict[str, list[str]]) -> str:
@@ -659,7 +683,7 @@ def application(environ, start_response):
         start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
         return [body]
 
-    if method == "POST" and path in {"/resume-source", "/run-search", "/approve-job", "/approve-resume", "/apply-job", "/export-approved"}:
+    if method == "POST" and path in {"/resume-source", "/run-search", "/approve-job", "/approve-resume", "/apply-job", "/mark-submitted", "/export-approved"}:
         form = parse_request_form(environ)
         try:
             if path == "/resume-source":
@@ -672,6 +696,8 @@ def application(environ, start_response):
                 message = handle_approve_resume(form)
             elif path == "/apply-job":
                 message = handle_apply_job(form)
+            elif path == "/mark-submitted":
+                message = handle_mark_submitted(form)
             else:
                 message = handle_export_approved()
             return redirect(start_response, f"/?message={quote_plus(message)}")
