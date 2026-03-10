@@ -509,6 +509,7 @@ def render_queue_card(item: dict) -> str:
   <h3>{html_escape(item.get("title", ""))}</h3>
   <p><strong>{html_escape(item.get("company", ""))}</strong> · Score {item.get("score", 0)} · Review {status_badge(review)}</p>
   <p class="muted"><a href="{html_escape(item.get("url", ""))}" target="_blank" rel="noreferrer">Open job</a></p>
+  <p class="muted"><a href="{html_escape(item.get("url", ""))}" target="_blank" rel="noreferrer">Open ATS page</a></p>
   <p class="muted">Resume agent: {html_escape(resume)}{f" · Draft: {html_escape(resume_path)}" if resume_path else ""}</p>
   <p class="muted">Rendered files: {html_escape(rendered_docx or 'no docx yet')} · {html_escape(rendered_pdf or 'no pdf yet')}</p>
   <p class="muted">{f'<a href="{html_escape(draft_link)}">Download resume draft</a>' if draft_link else 'Resume draft not generated yet.'}{f' · <a href="{html_escape(docx_link)}">Download DOCX</a>' if docx_link else ''}{f' · <a href="{html_escape(pdf_link)}">Download PDF</a>' if pdf_link else ''}</p>
@@ -676,9 +677,12 @@ def handle_apply_job(form: dict[str, list[str]]) -> str:
     job_id = form.get("job_id", [""])[0]
     orchestrator = build_orchestrator()
     result = orchestrator.apply_job(job_id)
-    bundle = result.get("apply_bundle_path", "")
     command = result.get("apply_launch_command", "")
-    return f"Browser apply prepared for {job_id}. Download the bundle and run locally: {command or 'python3 <provider>_apply_playwright.py'} from {bundle or 'the generated bundle'}."
+    return (
+        f"Browser apply prepared for {job_id}. "
+        f"Download the apply bundle from the queue card, run {command or 'python3 <provider>_apply_playwright.py'} locally, "
+        "and the script will open the ATS page automatically."
+    )
 
 
 def handle_mark_submitted(form: dict[str, list[str]]) -> str:
