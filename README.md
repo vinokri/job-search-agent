@@ -29,6 +29,7 @@ Current limitation:
 ```text
 .
 ├── README.md
+├── run.sh
 ├── pyproject.toml
 ├── .gitignore
 ├── .dockerignore
@@ -67,6 +68,7 @@ Current limitation:
 9. Added a smoke test to verify the main CLI flow.
 10. Added a dependency-free web UI and container deployment files.
 11. Added a live job collector and cache file for supported company career sources.
+12. Added `run.sh` for one-command local startup.
 
 ## Workflow
 
@@ -196,6 +198,17 @@ At this point the automation stops. The approved list becomes the handoff point 
 
 ## Local UI
 
+Fastest local start:
+
+```bash
+cd "/Users/vinodhkrishnamoorthy/Documents/New project"
+./run.sh
+```
+
+That starts the UI at [http://127.0.0.1:8000](http://127.0.0.1:8000).
+
+Manual equivalent:
+
 Run the browser UI:
 
 ```bash
@@ -212,6 +225,8 @@ The UI supports:
 - viewing the ranked shortlist
 - approving, holding, or rejecting jobs from the review queue
 - exporting the approved jobs list
+
+When you click `Run search` in the UI, it now tries to fetch live jobs first from the supported company sources. If no live jobs are collected for that query, it falls back to the local sample file.
 
 ## Deployment
 
@@ -241,4 +256,4 @@ PYTHONPATH=src python3 -m unittest discover -s tests
 
 ## GitHub status
 
-This repository is ready to push to GitHub, but this machine currently does not have `gh` installed and there is no remote configured. Once you provide a GitHub repo URL or install/authenticate `gh`, the local repo can be pushed directly.
+The repository is published at [vinokri/job-search-agent](https://github.com/vinokri/job-search-agent). Local pushes from this terminal still depend on GitHub authentication being available; GitHub Desktop remains the reliable push path on this machine.
