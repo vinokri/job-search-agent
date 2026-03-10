@@ -89,12 +89,23 @@ Normalize jobs into `data/jobs.sample.json` or another JSON file using this shap
 
 ### 3. Generate the shortlist
 
+The `shortlist` command can now take runtime search parameters:
+
+- up to 3 `--job-title` inputs
+- up to 5 `--company` inputs
+
+If provided, these override the profile defaults for shortlist generation and also filter jobs before scoring.
+
 ```bash
 python3 -m job_agent shortlist \
   --profile data/profile.json \
   --jobs data/jobs.sample.json \
   --out data/shortlist.json \
-  --markdown data/shortlist.md
+  --markdown data/shortlist.md \
+  --job-title "software engineer" \
+  --job-title "data engineer" \
+  --company "NVIDIA" \
+  --company "Snowflake"
 ```
 
 ### 4. Seed the approval queue

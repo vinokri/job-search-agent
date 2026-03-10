@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
+from typing import Any
 
 from .models import dump_json, load_json
 
@@ -32,9 +33,33 @@ def phrase_in_text(phrase: str, text: str) -> bool:
     return phrase.lower() in (text or "").lower()
 
 
-def score_job(profile: dict, job: dict) -> dict:
+def build_runtime_preferences(profile: dict, job_titles: list[str] | None = None, companies: list[str] | None = None) -> dict[str, Any]:
+    preferences = dict(profile.get("preferences", {}))
+    if job_titles:
+        preferences["titles_include"] = job_titles
+    if companies:
+        preferences["companies"] = companies
+    return preferences
+
+
+def job_matches_runtime_filters(job: dict, preferences: dict[str, Any]) -> bool:
+    preferred_companies = {
+        value.lower() for value in normalize_list(preferences.get("companies", []))
+    }
+    included_titles = normalize_list(preferences.get("titles_include", []))
+    title = str(job.get("title", ""))
+    company = str(job.get("company", "")).lower()
+
+    company_match = not preferred_companies or company in preferred_companies
+    title_match = not included_titles or any(
+        phrase_in_text(phrase, title) for phrase in included_titles
+    )
+    return company_match and title_match
+
+
+def score_job(profile: dict, job: dict, preferences: dict[str, Any] | None = None) -> dict:
     candidate = profile.get("candidate", {})
-    preferences = profile.get("preferences", {})
+    preferences = preferences or profile.get("preferences", {})
     skills = profile.get("skills", {})
 
     title = job.get("title", "")
@@ -145,10 +170,22 @@ def score_job(profile: dict, job: dict) -> dict:
     }
 
 
-def build_shortlist(profile_path: str, jobs_path: str, out_path: str, markdown_path: str | None = None, limit: int = 25) -> list[dict]:
+def build_shortlist(
+    profile_path: str,
+    jobs_path: str,
+    out_path: str,
+    markdown_path: str | None = None,
+    limit: int = 25,
+    job_titles: list[str] | None = None,
+    companies: list[str] | None = None,
+) -> list[dict]:
     profile = load_json(profile_path)
     jobs = load_json(jobs_path)
-    scored = [score_job(profile, job) for job in jobs]
+    preferences = build_runtime_preferences(profile, job_titles, companies)
+    filtered_jobs = [
+        job for job in jobs if job_matches_runtime_filters(job, preferences)
+    ]
+    scored = [score_job(profile, job, preferences) for job in filtered_jobs]
     shortlist = sorted(scored, key=lambda item: item["score"], reverse=True)[:limit]
     dump_json(out_path, shortlist)
     if markdown_path:

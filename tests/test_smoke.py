@@ -35,6 +35,24 @@ class SmokeTest(unittest.TestCase):
             self.assertEqual(len(approved), 1)
             self.assertEqual(approved[0]["id"], top_job_id)
 
+    def test_runtime_company_and_title_filters(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            shortlist_path = tmp / "shortlist.json"
+
+            shortlist = build_shortlist(
+                str(ROOT / "data/profile.json"),
+                str(ROOT / "data/jobs.sample.json"),
+                str(shortlist_path),
+                None,
+                10,
+                ["data engineer"],
+                ["Snowflake"],
+            )
+
+            self.assertEqual(len(shortlist), 1)
+            self.assertEqual(shortlist[0]["id"], "snowflake-001")
+
 
 if __name__ == "__main__":
     unittest.main()
