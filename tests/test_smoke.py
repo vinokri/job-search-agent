@@ -13,6 +13,7 @@ from job_agent.collectors import (
     extract_google_results,
     extract_jobposting_from_html,
 )
+from job_agent.ats import select_adapter
 from job_agent.orchestration import JobSearchOrchestrator, WorkflowPaths, WorkflowStore
 from job_agent.queue import export_approved, seed_queue, update_status
 from job_agent.resume import parse_resume_structure
@@ -111,6 +112,12 @@ class SmokeTest(unittest.TestCase):
         self.assertEqual(diagnostics["response_type"], "json")
         self.assertIn("positions", diagnostics["top_level_keys"])
         self.assertEqual(mocked_fetch.call_count, 1)
+
+    def test_select_adapter_supports_google_and_nvidia(self) -> None:
+        google = select_adapter({"company": "Google", "url": "https://www.google.com/about/careers/applications/jobs/results/123"})
+        nvidia = select_adapter({"company": "NVIDIA", "url": "https://jobs.nvidia.com/careers/job/123"})
+        self.assertIsNotNone(google)
+        self.assertIsNotNone(nvidia)
 
     def test_parse_resume_structure(self) -> None:
         text = """Vinodh Krishnamoorthy
@@ -249,9 +256,10 @@ MS Computer Science
 
             with patch("job_agent.ats.playwright_python_available", return_value=True):
                 applied = orchestrator.apply_job("google-001")
-            self.assertEqual(applied["apply_status"], "browser_ready")
+            self.assertEqual(applied["apply_status"], "bundle_ready")
             self.assertTrue(Path(applied["application_packet_path"]).exists())
             self.assertTrue(Path(applied["application_run_path"]).exists())
+            self.assertTrue(Path(applied["apply_bundle_path"]).exists())
 
             submitted = orchestrator.mark_submitted("google-001")
             self.assertEqual(submitted["apply_status"], "submitted")

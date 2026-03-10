@@ -32,10 +32,11 @@ The current architecture is built around explicit orchestration and durable stat
 - `ApplyJobAgent`
   - prepares an external apply packet
   - creates a browser apply run
+  - packages a downloadable local bundle
   - selects the ATS adapter
 - `ATSAdapter`
   - provider interface for company-specific apply flows
-  - first provider implemented: Google
+  - current providers implemented: Google and NVIDIA
 - `ApplicationRunStore`
   - stores apply-run metadata, screenshots, launcher scripts, and errors
 - `JobSearchOrchestrator`
@@ -92,14 +93,15 @@ The external apply flow is now browser-oriented.
 1. `Apply In Browser` prepares the application packet.
 2. The system selects an ATS adapter for the company.
 3. It creates an application run under [application-runs](/Users/vinodhkrishnamoorthy/Documents/New%20project/data/application-runs).
-4. For Google, it writes a Playwright-compatible launcher script and a local launch command.
-5. The browser run is intended to stop before final submit.
-6. After you manually complete the external ATS submit, you click `Mark Submitted`.
+4. It packages a downloadable ZIP bundle containing the launcher script, run metadata, selected resume file, and screenshots directory.
+5. For Google and NVIDIA, it writes a Playwright-compatible launcher script and a local launch command.
+6. The browser run is intended to stop before final submit.
+7. After you manually complete the external ATS submit, you click `Mark Submitted`.
 
 This means:
 
 - internal workflow automation is complete
-- external browser assistance is prepared
+- external browser assistance is prepared as a local bundle
 - final submission is still a human decision
 
 ## Project structure
@@ -221,8 +223,9 @@ This:
 
 - creates the application packet
 - creates the browser apply run
+- packages the downloadable apply bundle
 - selects the adapter
-- writes the launch command into runtime
+- writes the local launch command into runtime
 - does not mark the application submitted yet
 
 ### 6. Confirm final external submission
@@ -262,6 +265,7 @@ The UI supports:
 - approving jobs
 - previewing and approving tailored resumes
 - preparing browser apply runs
+- downloading the local apply bundle
 - marking external submissions as completed
 - exporting approved jobs
 
@@ -294,7 +298,7 @@ docker run --rm -p 8000:8000 job-search-agent
 
 Important note:
 
-- hosted environments like Render can prepare apply runs
+- hosted environments like Render can prepare apply runs and downloadable bundles
 - browser automation should be launched on your local machine, not on the hosted container
 
 ## Local development
@@ -308,7 +312,7 @@ PYTHONPATH=src python3 -m unittest discover -s tests
 ## Current limitations
 
 - Live collector parsing remains best-effort because career sites change frequently.
-- Google is the first ATS adapter wired into the browser apply architecture.
+- Google and NVIDIA are currently wired into the browser apply architecture.
 - DOCX and PDF generation depend on tools available in the host runtime.
 - PDF source parsing is still fallback-grade compared with native DOCX parsing.
 - Hosted containers use ephemeral storage unless you add persistence.

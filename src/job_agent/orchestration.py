@@ -118,6 +118,7 @@ def default_job_state(item: dict) -> dict:
         "application_run_path": "",
         "apply_provider": "",
         "apply_launch_command": "",
+        "apply_bundle_path": "",
         "last_agent": "search",
         "updated_at": utc_now(),
     }
@@ -184,6 +185,7 @@ class SearchJobAgent:
                     "application_run_path": current["application_run_path"],
                     "apply_provider": current["apply_provider"],
                     "apply_launch_command": current["apply_launch_command"],
+                    "apply_bundle_path": current["apply_bundle_path"],
                     "notes": "",
                     "reasons": current["reasons"],
                     "last_agent": current["last_agent"],
@@ -305,7 +307,8 @@ class ApplyJobAgent:
             "provider": adapter.provider,
             "application_run_id": run["run_id"],
             "application_run_path": run["run_dir"],
-            "launch_command": run.get("launch_command", ""),
+            "launch_command": run.get("local_launch_command", ""),
+            "bundle_path": run.get("bundle_path", ""),
             "status": run["status"],
             "prepared_at": utc_now(),
         }
@@ -316,7 +319,8 @@ class ApplyJobAgent:
         job["application_run_id"] = run["run_id"]
         job["application_run_path"] = run["run_dir"]
         job["apply_provider"] = adapter.provider
-        job["apply_launch_command"] = run.get("launch_command", "")
+        job["apply_launch_command"] = run.get("local_launch_command", "")
+        job["apply_bundle_path"] = run.get("bundle_path", "")
         job["last_agent"] = self.name
         job["updated_at"] = utc_now()
         self.store.save_runtime(runtime)
@@ -329,7 +333,8 @@ class ApplyJobAgent:
             payload={
                 "application_packet_path": str(packet_path),
                 "application_run_path": run["run_dir"],
-                "launch_command": run.get("launch_command", ""),
+                "launch_command": run.get("local_launch_command", ""),
+                "bundle_path": run.get("bundle_path", ""),
             },
         )
         return job
@@ -388,6 +393,7 @@ class ApplyJobAgent:
                 item["application_run_path"] = job["application_run_path"]
                 item["apply_provider"] = job["apply_provider"]
                 item["apply_launch_command"] = job["apply_launch_command"]
+                item["apply_bundle_path"] = job["apply_bundle_path"]
                 item["last_agent"] = job["last_agent"]
         self.store.save_queue(queue)
 

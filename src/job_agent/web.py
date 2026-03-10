@@ -3,8 +3,7 @@ from __future__ import annotations
 import html
 import os
 from pathlib import Path
-from urllib.parse import unquote_plus
-from urllib.parse import parse_qs, quote_plus
+from urllib.parse import parse_qs, quote_plus, unquote_plus
 from wsgiref.simple_server import make_server
 
 from .orchestration import JobSearchOrchestrator, WorkflowStore, build_default_paths
@@ -65,6 +64,26 @@ def display_path(path: Path) -> str:
 
 def status_badge(status: str) -> str:
     return f'<span class="badge badge-{html_escape(status)}">{html_escape(status)}</span>'
+
+
+def artifact_href(path_value: str) -> str:
+    if not path_value:
+        return ""
+    return f"/artifact?path={quote_plus(path_value)}"
+
+
+def resolve_artifact_path(path_value: str) -> Path | None:
+    if not path_value:
+        return None
+    path = Path(path_value).resolve()
+    allowed_roots = [DATA_DIR.resolve()]
+    for root in allowed_roots:
+        try:
+            path.relative_to(root)
+            return path
+        except ValueError:
+            continue
+    return None
 
 
 def build_orchestrator() -> JobSearchOrchestrator:
@@ -476,9 +495,12 @@ def render_queue_card(item: dict) -> str:
     apply_command = item.get("apply_launch_command", "")
     rendered_docx = item.get("rendered_resume_docx_path", "")
     rendered_pdf = item.get("rendered_resume_pdf_path", "")
+    bundle_path = item.get("apply_bundle_path", "")
     preview = ""
     if resume_path and Path(resume_path).exists():
         preview = "\n".join(Path(resume_path).read_text(encoding="utf-8").splitlines()[:8])
+    bundle_link = artifact_href(bundle_path)
+    packet_link = artifact_href(packet_path)
     return f"""
 <article class="job-card">
   <h3>{html_escape(item.get("title", ""))}</h3>
@@ -488,6 +510,8 @@ def render_queue_card(item: dict) -> str:
   <p class="muted">Rendered files: {html_escape(rendered_docx or 'no docx yet')} · {html_escape(rendered_pdf or 'no pdf yet')}</p>
   <p class="muted">Apply agent: {html_escape(apply)}{f" · Packet: {html_escape(packet_path)}" if packet_path else ""}</p>
   <p class="muted">Apply run: {html_escape(run_path or 'not prepared yet')}</p>
+  <p class="muted">Local launch: {html_escape(apply_command or 'Download the bundle and run it locally.')}</p>
+  <p class="muted">{f'<a href="{html_escape(bundle_link)}">Download apply bundle</a>' if bundle_link else 'Apply bundle not prepared yet.'}{f' · <a href="{html_escape(packet_link)}">Download packet</a>' if packet_link else ''}</p>
   {f'<pre class="muted" style="white-space: pre-wrap; overflow-x: auto; background: rgba(19,35,59,0.04); padding: 12px; border-radius: 12px;">{html_escape(preview)}</pre>' if preview else ''}
   <form class="inline-form" method="post" action="/approve-job">
     <input type="hidden" name="job_id" value="{job_id}">
@@ -648,8 +672,9 @@ def handle_apply_job(form: dict[str, list[str]]) -> str:
     job_id = form.get("job_id", [""])[0]
     orchestrator = build_orchestrator()
     result = orchestrator.apply_job(job_id)
+    bundle = result.get("apply_bundle_path", "")
     command = result.get("apply_launch_command", "")
-    return f"Browser apply prepared for {job_id}. Run locally: {command or 'Playwright runtime not available yet.'}"
+    return f"Browser apply prepared for {job_id}. Download the bundle and run locally: {command or 'python3 <provider>_apply_playwright.py'} from {bundle or 'the generated bundle'}."
 
 
 def handle_mark_submitted(form: dict[str, list[str]]) -> str:
@@ -682,6 +707,28 @@ def application(environ, start_response):
         body = render_home(message)
         start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
         return [body]
+
+    if method == "GET" and path == "/artifact":
+        requested = parse_qs(environ.get("QUERY_STRING", "")).get("path", [""])[0]
+        resolved = resolve_artifact_path(requested)
+        if not resolved or not resolved.exists():
+            start_response("404 Not Found", [("Content-Type", "text/plain; charset=utf-8")])
+            return [b"Artifact not found"]
+        content_type = "application/octet-stream"
+        if resolved.suffix == ".json":
+            content_type = "application/json; charset=utf-8"
+        elif resolved.suffix == ".zip":
+            content_type = "application/zip"
+        elif resolved.suffix == ".md":
+            content_type = "text/markdown; charset=utf-8"
+        start_response(
+            "200 OK",
+            [
+                ("Content-Type", content_type),
+                ("Content-Disposition", f'attachment; filename="{resolved.name}"'),
+            ],
+        )
+        return [resolved.read_bytes()]
 
     if method == "POST" and path in {"/resume-source", "/run-search", "/approve-job", "/approve-resume", "/apply-job", "/mark-submitted", "/export-approved"}:
         form = parse_request_form(environ)

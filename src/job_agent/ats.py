@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import os
+import shutil
 from pathlib import Path
 
 from .models import dump_json, load_json, utc_now
@@ -13,6 +14,10 @@ def playwright_python_available() -> bool:
 
 def shell_quote(value: str) -> str:
     return "'" + value.replace("'", "'\"'\"'") + "'"
+
+
+def running_in_hosted_container() -> bool:
+    return bool(os.environ.get("RENDER")) or Path("/app").exists()
 
 
 class ApplicationRunStore:
@@ -71,13 +76,13 @@ class ATSAdapter:
         raise NotImplementedError
 
 
-class GoogleATSAdapter(ATSAdapter):
-    provider = "Google"
-
-    def supports(self, job: dict) -> bool:
-        company = str(job.get("company", "")).lower()
-        url = str(job.get("url", "")).lower()
-        return company == "google" or "google.com/about/careers" in url
+class BrowserATSAdapter(ATSAdapter):
+    apply_selectors = [
+        "text=/apply/i",
+        "text=/apply now/i",
+        "button:has-text('Apply')",
+        "a:has-text('Apply')",
+    ]
 
     def prepare_run(self, run_store: ApplicationRunStore, profile: dict, job: dict, resume_path: str) -> dict:
         run = run_store.create_run(
@@ -89,9 +94,10 @@ class GoogleATSAdapter(ATSAdapter):
                 "job_title": job["title"],
                 "company": job["company"],
                 "resume_path": resume_path,
-                "status": "browser_ready",
+                "status": "bundle_ready",
                 "submit_mode": "review_before_submit",
                 "playwright_available": playwright_python_available(),
+                "hosted_runtime": running_in_hosted_container(),
                 "form_state": {
                     "candidate_name": profile.get("candidate", {}).get("name", ""),
                     "candidate_email": profile.get("candidate", {}).get("email", ""),
@@ -100,19 +106,35 @@ class GoogleATSAdapter(ATSAdapter):
                 "errors": [],
             },
         )
-        script_path = Path(run["run_dir"]) / "google_apply_playwright.py"
+
+        local_resume_name = ""
+        if resume_path and Path(resume_path).exists():
+            destination = Path(run["run_dir"]) / Path(resume_path).name
+            shutil.copy2(resume_path, destination)
+            local_resume_name = destination.name
+        run["local_resume_name"] = local_resume_name
+
+        script_name = f"{self.provider.lower()}_apply_playwright.py"
+        script_path = Path(run["run_dir"]) / script_name
         script_path.write_text(self._build_script(run), encoding="utf-8")
-        launch_command = f"python3 {shell_quote(str(script_path))}"
         run["playwright_script_path"] = str(script_path)
-        run["launch_command"] = launch_command
+        run["local_launch_command"] = f"python3 {shell_quote(script_name)}"
+
+        bundle_base = Path(run["run_dir"]).with_suffix("")
+        bundle_path = shutil.make_archive(str(bundle_base), "zip", root_dir=run["run_dir"])
+        run["bundle_path"] = bundle_path
+
+        if run["hosted_runtime"]:
+            run["errors"].append("Hosted deployments prepare apply bundles but cannot open your local browser. Download the bundle and run it on your machine.")
         if not run["playwright_available"]:
-            run["status"] = "awaiting_playwright_runtime"
-            run["errors"].append("Install Playwright in the local runtime to launch browser automation.")
+            run["errors"].append("Install Playwright in the local runtime before launching the bundle.")
+
         run_store.save_run(run)
         return run
 
     def _build_script(self, run: dict) -> str:
-        run_path = str(Path(run["run_dir"]) / "run.json")
+        resume_name = run.get("local_resume_name", "")
+        selectors_literal = ",\n                ".join(repr(selector) for selector in self.apply_selectors)
         return f"""from __future__ import annotations
 
 import asyncio
@@ -122,7 +144,8 @@ from pathlib import Path
 from playwright.async_api import async_playwright
 
 
-RUN_PATH = Path({run_path!r})
+RUN_PATH = Path("run.json")
+LOCAL_RESUME = Path({resume_name!r})
 
 
 async def click_first(page, selectors):
@@ -152,13 +175,13 @@ async def fill_first(page, selectors, value):
 
 
 async def upload_first(page, selectors, file_path):
-    if not file_path:
+    if not file_path or not file_path.exists():
         return ""
     for selector in selectors:
         locator = page.locator(selector).first
         try:
             if await locator.count():
-                await locator.set_input_files(file_path)
+                await locator.set_input_files(str(file_path))
                 return selector
         except Exception:
             continue
@@ -167,7 +190,8 @@ async def upload_first(page, selectors, file_path):
 
 async def main():
     run = json.loads(RUN_PATH.read_text(encoding="utf-8"))
-    screenshots_dir = Path(run["screenshots_dir"])
+    screenshots_dir = Path("screenshots")
+    screenshots_dir.mkdir(exist_ok=True)
     async with async_playwright() as playwright:
         browser = await playwright.chromium.launch(headless=False)
         context = await browser.new_context(accept_downloads=True)
@@ -177,10 +201,7 @@ async def main():
         await click_first(
             page,
             [
-                "text=/apply/i",
-                "text=/apply now/i",
-                "button:has-text('Apply')",
-                "a:has-text('Apply')",
+                {selectors_literal}
             ],
         )
         await page.wait_for_timeout(2500)
@@ -189,11 +210,11 @@ async def main():
         await fill_first(page, ["input[name='name']", "input[type='text']"], form_state.get("candidate_name", ""))
         await fill_first(page, ["input[name='email']", "input[type='email']"], form_state.get("candidate_email", ""))
         await fill_first(page, ["input[name='phone']", "input[type='tel']"], form_state.get("candidate_phone", ""))
-        await upload_first(page, ["input[type='file']"], run.get("resume_path", ""))
+        await upload_first(page, ["input[type='file']"], LOCAL_RESUME)
         await page.screenshot(path=str(screenshots_dir / "03-form-filled.png"), full_page=True)
-        print("Browser apply flow is ready for manual review and final submit.")
-        print("Leave the browser open, review the application, submit manually, then return here.")
-        input("Press Enter after you have finished the browser review...")
+        print("Review the application in the browser and submit it manually.")
+        print("After you submit, return to the app and click 'Mark Submitted'.")
+        input("Press Enter after you finish reviewing the browser session...")
 
 
 if __name__ == "__main__":
@@ -201,8 +222,26 @@ if __name__ == "__main__":
 """
 
 
+class GoogleATSAdapter(BrowserATSAdapter):
+    provider = "Google"
+
+    def supports(self, job: dict) -> bool:
+        company = str(job.get("company", "")).lower()
+        url = str(job.get("url", "")).lower()
+        return company == "google" or "google.com/about/careers" in url
+
+
+class NvidiaATSAdapter(BrowserATSAdapter):
+    provider = "NVIDIA"
+
+    def supports(self, job: dict) -> bool:
+        company = str(job.get("company", "")).lower()
+        url = str(job.get("url", "")).lower()
+        return company == "nvidia" or "jobs.nvidia.com" in url or "nvidia.com" in url
+
+
 def select_adapter(job: dict) -> ATSAdapter | None:
-    adapters: list[ATSAdapter] = [GoogleATSAdapter()]
+    adapters: list[ATSAdapter] = [GoogleATSAdapter(), NvidiaATSAdapter()]
     for adapter in adapters:
         if adapter.supports(job):
             return adapter
