@@ -87,6 +87,27 @@ def resolve_artifact_path(path_value: str) -> Path | None:
     return None
 
 
+def resolve_bundle_path(bundle_path: str, packet_path: str, run_path: str) -> str:
+    if bundle_path:
+        return bundle_path
+    if packet_path:
+        packet = resolve_artifact_path(packet_path)
+        if packet and packet.exists():
+            try:
+                payload = json.loads(packet.read_text(encoding="utf-8"))
+            except json.JSONDecodeError:
+                payload = {}
+            inferred = str(payload.get("bundle_path", "")).strip()
+            if inferred:
+                return inferred
+    if run_path:
+        inferred = f"{run_path}.zip"
+        resolved = resolve_artifact_path(inferred)
+        if resolved and resolved.exists():
+            return inferred
+    return ""
+
+
 def build_orchestrator() -> JobSearchOrchestrator:
     paths = build_default_paths(ROOT)
     paths.profile = DEFAULT_PROFILE
@@ -496,7 +517,11 @@ def render_queue_card(item: dict) -> str:
     apply_command = item.get("apply_launch_command", "")
     rendered_docx = item.get("rendered_resume_docx_path", "")
     rendered_pdf = item.get("rendered_resume_pdf_path", "")
-    bundle_path = item.get("apply_bundle_path", "")
+    bundle_path = resolve_bundle_path(
+        item.get("apply_bundle_path", ""),
+        packet_path,
+        run_path,
+    )
     preview = ""
     if resume_path and Path(resume_path).exists():
         preview = "\n".join(Path(resume_path).read_text(encoding="utf-8").splitlines()[:8])
@@ -596,7 +621,11 @@ def build_pending_apply_runs_payload(environ) -> list[dict]:
     for item in queue:
         if item.get("apply_status") != "bundle_ready":
             continue
-        bundle_path = item.get("apply_bundle_path", "")
+        bundle_path = resolve_bundle_path(
+            item.get("apply_bundle_path", ""),
+            item.get("application_packet_path", ""),
+            item.get("application_run_path", ""),
+        )
         if not bundle_path:
             continue
         pending.append(
