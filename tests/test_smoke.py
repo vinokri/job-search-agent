@@ -181,10 +181,11 @@ MS Computer Science
             orchestrator.refresh_resume_source(str(resume_path))
 
             with patch(
-                "job_agent.orchestration.collect_live_jobs",
-                return_value=[],
+                "job_agent.orchestration.collect_live_jobs_with_diagnostics",
+                return_value=([], {"Snowflake": {"status": "ok", "jobs_collected": 0, "requested_titles": ["data engineer"]}}),
             ):
-                orchestrator.run_search(["data engineer"], ["Snowflake"], 10)
+                result = orchestrator.run_search(["data engineer"], ["Snowflake"], 10)
+            self.assertIn("diagnostics", result)
 
             approved = orchestrator.approve_job("snowflake-001")
             self.assertEqual(approved["resume_status"], "draft_ready")
@@ -235,10 +236,19 @@ MS Computer Science
 
             def fake_collect_live_jobs(out_path, job_titles, companies, limit_per_company):  # noqa: ANN001,ANN202
                 Path(out_path).write_text(json.dumps(live_jobs), encoding="utf-8")
-                return live_jobs
+                return (
+                    live_jobs,
+                    {
+                        "Snowflake": {
+                            "status": "ok",
+                            "jobs_collected": len(live_jobs),
+                            "requested_titles": job_titles or [],
+                        }
+                    },
+                )
 
             with patch.object(web, "build_orchestrator", return_value=orchestrator), patch(
-                "job_agent.orchestration.collect_live_jobs",
+                "job_agent.orchestration.collect_live_jobs_with_diagnostics",
                 side_effect=fake_collect_live_jobs,
             ):
                 response = b"".join(

@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-from .collectors import collect_live_jobs
+from .collectors import collect_live_jobs_with_diagnostics
 from .models import dump_json, load_json, utc_now
 from .resume import (
     build_tailored_resume_markdown,
@@ -123,7 +123,7 @@ class SearchJobAgent:
         self.store = store
 
     def run(self, job_titles: list[str] | None, companies: list[str] | None, limit: int = 25) -> dict:
-        live_jobs = collect_live_jobs(
+        live_jobs, diagnostics = collect_live_jobs_with_diagnostics(
             str(self.store.paths.live_jobs),
             job_titles=job_titles,
             companies=companies,
@@ -187,13 +187,15 @@ class SearchJobAgent:
             "companies": companies or [],
             "live_jobs_count": len(live_jobs),
             "shortlist_count": len(shortlist),
+            "diagnostics": diagnostics,
+            "jobs_source": str(jobs_source),
         }
         self.store.save_runtime(runtime)
         self.store.save_queue(queue)
         self.store.append_memory(
             self.name,
             "search",
-            f"Collected {len(live_jobs)} live jobs and shortlisted {len(shortlist)} roles.",
+            f"Collected {len(live_jobs)} live jobs and shortlisted {len(shortlist)} roles using {jobs_source.name}.",
             payload=runtime["last_search"],
         )
         return runtime["last_search"]

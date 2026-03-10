@@ -96,6 +96,8 @@ def render_home(message: str = "") -> bytes:
     memory_rows = "\n".join(render_memory_row(item) for item in memory[-8:][::-1]) or "<p class='empty'>No memory yet.</p>"
     banner = f"<div class='banner'>{html_escape(message)}</div>" if message else ""
     last_search = runtime.get("last_search", {}) if isinstance(runtime, dict) else {}
+    diagnostics = last_search.get("diagnostics", {}) if isinstance(last_search, dict) else {}
+    diagnostics_rows = "\n".join(render_diagnostic_row(name, item) for name, item in diagnostics.items()) or "<p class='empty'>No diagnostics yet.</p>"
 
     page = f"""<!doctype html>
 <html lang="en">
@@ -342,6 +344,7 @@ def render_home(message: str = "") -> bytes:
         <p class="muted">Agent memory: {html_escape(display_path(DEFAULT_MEMORY))}</p>
         <p class="muted">Structured resume: {html_escape(display_path(DEFAULT_RESUME_STRUCTURED))}</p>
         <p class="muted">Last search companies: {html_escape(', '.join(last_search.get('companies', [])) or 'profile defaults')}</p>
+        <p class="muted">Last search source: {html_escape(last_search.get('jobs_source', 'unknown'))}</p>
       </div>
     </section>
     <section class="grid">
@@ -419,6 +422,10 @@ def render_home(message: str = "") -> bytes:
       <div class="panel">
         <h2>Review Queue</h2>
         <div class="list">{queue_rows}</div>
+      </div>
+      <div class="panel full">
+        <h2>Search Diagnostics</h2>
+        <div class="list">{diagnostics_rows}</div>
       </div>
       <div class="panel full">
         <h2>Approved Jobs</h2>
@@ -514,6 +521,18 @@ def render_memory_row(item: dict) -> str:
   <p class="muted">{html_escape(item.get("timestamp", ""))}</p>
   <p>{html_escape(item.get("message", ""))}</p>
   <p class="muted">Action: {html_escape(item.get("action", ""))}{f" · Job {html_escape(item.get('job_id', ''))}" if item.get('job_id') else ""}</p>
+</article>
+"""
+
+
+def render_diagnostic_row(name: str, item: dict) -> str:
+    error_text = f" · Error: {item.get('error', '')}" if item.get("error") else ""
+    return f"""
+<article class="job-card">
+  <h3>{html_escape(name)}</h3>
+  <p class="muted">Status: {html_escape(str(item.get("status", "unknown")))} · Jobs collected: {html_escape(str(item.get("jobs_collected", 0)))}</p>
+  <p class="muted">Requested titles: {html_escape(', '.join(item.get('requested_titles', [])) or 'none')}</p>
+  <p class="muted">{html_escape(error_text or 'No collector error reported.')}</p>
 </article>
 """
 

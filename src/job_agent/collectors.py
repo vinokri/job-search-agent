@@ -21,9 +21,16 @@ DATABRICKS_SITEMAP = "https://www.databricks.com/sitemap.xml"
 
 
 def fetch_url(url: str, method: str = "GET", data: bytes | None = None, content_type: str | None = None) -> str:
-    headers = {"User-Agent": USER_AGENT}
+    headers = {
+        "User-Agent": USER_AGENT,
+        "Accept-Language": "en-US,en;q=0.9",
+        "Accept": "text/html,application/json;q=0.9,*/*;q=0.8",
+    }
     if content_type:
         headers["Content-Type"] = content_type
+    if "wd5.myworkdayjobs.com" in url:
+        headers["Origin"] = "https://nvidia.wd5.myworkdayjobs.com"
+        headers["Referer"] = "https://nvidia.wd5.myworkdayjobs.com/en-US/NVIDIAExternalCareerSite"
     request = Request(url, data=data, headers=headers, method=method)
     with urlopen(request, timeout=20) as response:
         return response.read().decode("utf-8", errors="replace")
@@ -217,6 +224,30 @@ def extract_google_results(html: str) -> list[dict]:
                 "skills": extract_skills_from_text(title),
             }
         )
+    if jobs:
+        return unique_jobs(jobs)
+
+    plain_text = normalize_whitespace(re.sub(r"<[^>]+>", "\n", html))
+    fallback_pattern = re.compile(
+        r"(Software Engineer[^\n]*|Data Engineer[^\n]*|Machine Learning Engineer[^\n]*|Product Solutions Engineer[^\n]*|Customer Solutions Engineer[^\n]*)\s+Google \| ([^\n]+)",
+        flags=re.IGNORECASE,
+    )
+    for title, location in fallback_pattern.findall(plain_text):
+        clean_title = normalize_whitespace(title)
+        jobs.append(
+            {
+                "id": f"google-{slugify(clean_title)}",
+                "company": "Google",
+                "title": clean_title,
+                "url": GOOGLE_RESULTS,
+                "location": normalize_whitespace(location),
+                "remote": "unknown",
+                "employment_type": "full-time",
+                "posted_at": "",
+                "description": clean_title,
+                "skills": extract_skills_from_text(clean_title),
+            }
+        )
     return unique_jobs(jobs)
 
 
@@ -232,8 +263,10 @@ def collect_google_jobs(job_titles: list[str] | None, limit: int = 20) -> list[d
         except (HTTPError, URLError):
             continue
         for item in extract_google_results(html):
-            if title_matches(item["title"], job_titles):
-                collected.append(item)
+            collected.append(item)
+    filtered = [item for item in unique_jobs(collected) if title_matches(item["title"], job_titles)]
+    if filtered:
+        return filtered[:limit]
     return unique_jobs(collected)[:limit]
 
 
@@ -361,20 +394,49 @@ def collect_live_jobs(
     companies: list[str] | None = None,
     limit_per_company: int = 20,
 ) -> list[dict]:
+    jobs, _ = collect_live_jobs_with_diagnostics(out_path, job_titles, companies, limit_per_company)
+    return jobs
+
+
+def collect_live_jobs_with_diagnostics(
+    out_path: str | None = None,
+    job_titles: list[str] | None = None,
+    companies: list[str] | None = None,
+    limit_per_company: int = 20,
+) -> tuple[list[dict], dict[str, dict]]:
     normalized = {company.strip().lower(): company.strip() for company in companies or [] if company.strip()}
     requested = set(normalized) or {"nvidia", "google", "databricks", "snowflake"}
 
     jobs: list[dict] = []
+    diagnostics: dict[str, dict] = {}
+
+    def run_collector(label: str, fn) -> None:
+        try:
+            collected = fn(job_titles, limit_per_company)
+            jobs.extend(collected)
+            diagnostics[label] = {
+                "status": "ok",
+                "jobs_collected": len(collected),
+                "requested_titles": job_titles or [],
+            }
+        except Exception as exc:  # noqa: BLE001
+            diagnostics[label] = {
+                "status": "error",
+                "jobs_collected": 0,
+                "requested_titles": job_titles or [],
+                "error": str(exc),
+            }
+
     if "nvidia" in requested:
-        jobs.extend(collect_nvidia_jobs(job_titles, limit_per_company))
+        run_collector("NVIDIA", collect_nvidia_jobs)
     if "google" in requested:
-        jobs.extend(collect_google_jobs(job_titles, limit_per_company))
+        run_collector("Google", collect_google_jobs)
     if "databricks" in requested:
-        jobs.extend(collect_databricks_jobs(job_titles, limit_per_company))
+        run_collector("Databricks", collect_databricks_jobs)
     if "snowflake" in requested:
-        jobs.extend(collect_snowflake_jobs(job_titles, limit_per_company))
+        run_collector("Snowflake", collect_snowflake_jobs)
 
     filtered = unique_jobs(jobs)
     if out_path:
         dump_json(out_path, filtered)
-    return filtered
+    return filtered, diagnostics
