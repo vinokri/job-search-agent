@@ -714,6 +714,12 @@ def redirect(start_response, location: str) -> list[bytes]:
     return [b""]
 
 
+def stale_job_message(job_id: str) -> str:
+    return (
+        f"Saved state for {job_id} is stale. Click 'Clear previous run', refresh the page, and run the search again."
+    )
+
+
 def handle_run_search(form: dict[str, list[str]]) -> str:
     job_titles = parse_multi_value(form, "job_title", 3)
     companies = parse_multi_value(form, "company", 5)
@@ -743,14 +749,24 @@ def handle_resume_source(form: dict[str, list[object]]) -> str:
 def handle_approve_job(form: dict[str, list[str]]) -> str:
     job_id = form.get("job_id", [""])[0]
     orchestrator = build_orchestrator()
-    orchestrator.approve_job(job_id)
+    try:
+        orchestrator.approve_job(job_id)
+    except ValueError as exc:
+        if "not found" in str(exc).lower():
+            return stale_job_message(job_id)
+        raise
     return f"Approved {job_id}. The tailored resume is ready in the queue card. Use the download links to open it."
 
 
 def handle_apply_job(form: dict[str, list[str]]) -> str:
     job_id = form.get("job_id", [""])[0]
     orchestrator = build_orchestrator()
-    result = orchestrator.apply_job(job_id)
+    try:
+        result = orchestrator.apply_job(job_id)
+    except ValueError as exc:
+        if "not found" in str(exc).lower():
+            return stale_job_message(job_id)
+        raise
     command = result.get("apply_launch_command", "")
     return (
         f"Browser apply prepared for {job_id}. "
@@ -762,14 +778,24 @@ def handle_apply_job(form: dict[str, list[str]]) -> str:
 def handle_mark_submitted(form: dict[str, list[str]]) -> str:
     job_id = form.get("job_id", [""])[0]
     orchestrator = build_orchestrator()
-    result = orchestrator.mark_submitted(job_id)
+    try:
+        result = orchestrator.mark_submitted(job_id)
+    except ValueError as exc:
+        if "not found" in str(exc).lower():
+            return stale_job_message(job_id)
+        raise
     return f"External submission confirmed for {job_id}. Packet: {result.get('application_packet_path', '')}."
 
 
 def handle_approve_resume(form: dict[str, list[str]]) -> str:
     job_id = form.get("job_id", [""])[0]
     orchestrator = build_orchestrator()
-    orchestrator.approve_resume(job_id)
+    try:
+        orchestrator.approve_resume(job_id)
+    except ValueError as exc:
+        if "not found" in str(exc).lower():
+            return stale_job_message(job_id)
+        raise
     return f"Resume approved for {job_id}. The selected resume artifact is now attached to the apply flow."
 
 
