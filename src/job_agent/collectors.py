@@ -14,6 +14,7 @@ from .models import dump_json
 
 USER_AGENT = "job-search-agent/0.1 (+https://github.com/vinokri/job-search-agent)"
 WORKDAY_NVIDIA_JOBS = "https://nvidia.wd5.myworkdayjobs.com/wday/cxs/nvidia/NVIDIAExternalCareerSite/jobs"
+NVIDIA_RESULTS = "https://www.nvidia.com/en-us/about-nvidia/careers/"
 GOOGLE_RESULTS = "https://www.google.com/about/careers/applications/jobs/results"
 SNOWFLAKE_RESULTS = "https://careers.snowflake.com/us/en/search-results"
 SNOWFLAKE_SITEMAP = "https://careers.snowflake.com/sitemap.xml"
@@ -163,72 +164,56 @@ def collect_nvidia_jobs_with_diagnostics(job_titles: list[str] | None, limit: in
         "response_preview": "",
         "sample_titles": [],
     }
-    search_texts = job_titles or [""]
-    for search_text in search_texts:
-        payload = json.dumps(
-            {
-                "appliedFacets": {},
-                "limit": limit,
-                "offset": 0,
-                "searchText": search_text,
-            }
-        ).encode("utf-8")
+    queries = job_titles or [""]
+    for search_text in queries:
+        url = NVIDIA_RESULTS
+        if search_text:
+            url = f"{NVIDIA_RESULTS}?keyword={quote_plus(search_text)}"
         try:
-            response = fetch_url(
-                WORKDAY_NVIDIA_JOBS,
-                method="POST",
-                data=payload,
-                content_type="application/json",
-            )
+            response = fetch_url(url)
         except (HTTPError, URLError) as exc:
             diagnostics["status"] = "error"
             diagnostics["error"] = str(exc)
             continue
-        diagnostics["response_preview"] = preview_text(response)
-        try:
-            parsed = json.loads(response)
-        except json.JSONDecodeError:
-            diagnostics["response_type"] = "non-json"
-            continue
-        diagnostics["response_type"] = "json"
-        diagnostics["top_level_keys"] = sorted(parsed.keys()) if isinstance(parsed, dict) else []
-        diagnostics["sample_titles"] = [
-            normalize_whitespace(str(item.get("title", "")))
-            for item in parsed.get("jobPostings", [])[:5]
-            if isinstance(item, dict)
-        ]
-        for posting in parsed.get("jobPostings", []):
-            title = normalize_whitespace(str(posting.get("title", "")))
-            if not title_matches(title, job_titles):
+        diagnostics["response_type"] = "html"
+        diagnostics["response_preview"] = preview_text(re.sub(r"<[^>]+>", " ", response))
+        links = re.findall(
+            r'href="(https://nvidia\.wd5\.myworkdayjobs\.com/en-US/NVIDIAExternalCareerSite/job/[^"]+|/en-us/about-nvidia/careers/job-search/[^"]+)"',
+            response,
+            flags=re.IGNORECASE,
+        )
+        normalized_links = [urljoin("https://www.nvidia.com", link) for link in links]
+        diagnostics["top_level_keys"] = ["html-links"]
+        diagnostics["sample_titles"] = []
+        for link in normalized_links[: max(limit * 2, 20)]:
+            try:
+                html = fetch_url(link)
+            except (HTTPError, URLError):
                 continue
-            external_path = posting.get("externalPath", "")
-            locations = posting.get("locationsText") or ", ".join(
-                location.get("displayName", "")
-                for location in posting.get("locations", [])
-                if isinstance(location, dict)
-            )
-            description = normalize_whitespace(str(posting.get("bulletFields", [])))
-            job_url = (
-                f"https://nvidia.wd5.myworkdayjobs.com/en-US/NVIDIAExternalCareerSite/job/{external_path}"
-                if external_path
-                else "https://www.nvidia.com/en-us/about-nvidia/careers/"
-            )
-            collected.append(
-                {
-                    "id": posting.get("bulletFields", [title])[0].lower().replace(" ", "-")
-                    if posting.get("bulletFields")
-                    else f"nvidia-{slugify(title)}",
-                    "company": "NVIDIA",
-                    "title": title,
-                    "url": job_url,
-                    "location": normalize_whitespace(locations),
-                    "remote": "unknown",
-                    "employment_type": "full-time",
-                    "posted_at": str(posting.get("postedOn", "")),
-                    "description": description,
-                    "skills": extract_skills_from_text(" ".join([title, description])),
-                }
-            )
+            posting = extract_jobposting_from_html(html, link, "NVIDIA")
+            if posting:
+                if title_matches(posting["title"], job_titles):
+                    collected.append(posting)
+                    diagnostics["sample_titles"].append(posting["title"])
+                continue
+            title = extract_meta_content(html, "property", "og:title") or normalize_whitespace(link.rsplit("/", 1)[-1].replace("-", " "))
+            description = extract_meta_content(html, "name", "description")
+            if title_matches(title, job_titles):
+                collected.append(
+                    {
+                        "id": f"nvidia-{slugify(title)}",
+                        "company": "NVIDIA",
+                        "title": title,
+                        "url": link,
+                        "location": "",
+                        "remote": "unknown",
+                        "employment_type": "full-time",
+                        "posted_at": "",
+                        "description": description,
+                        "skills": extract_skills_from_text(" ".join([title, description])),
+                    }
+                )
+                diagnostics["sample_titles"].append(title)
     unique = unique_jobs(collected)[:limit]
     diagnostics["jobs_collected"] = len(unique)
     return unique, diagnostics
@@ -261,25 +246,32 @@ def extract_google_results(html: str) -> list[dict]:
     if jobs:
         return unique_jobs(jobs)
 
-    plain_text = normalize_whitespace(re.sub(r"<[^>]+>", "\n", html))
-    fallback_pattern = re.compile(
-        r"(Software Engineer[^\n]*|Data Engineer[^\n]*|Machine Learning Engineer[^\n]*|Product Solutions Engineer[^\n]*|Customer Solutions Engineer[^\n]*)\s+Google \| ([^\n]+)",
-        flags=re.IGNORECASE,
-    )
-    for title, location in fallback_pattern.findall(plain_text):
-        clean_title = normalize_whitespace(title)
+    plain_text = re.sub(r"<[^>]+>", "\n", html)
+    chunks = re.split(r"Learn more\s+share link", plain_text, flags=re.IGNORECASE)
+    for chunk in chunks:
+        text = normalize_whitespace(chunk)
+        if "Google |" not in text:
+            continue
+        title_match = re.search(
+            r"([A-Z][A-Za-z0-9,&/+\-() ]{8,120}?(Architect|Engineer|Manager|Lead|Consultant))",
+            text,
+        )
+        location_match = re.search(r"Google \| ([A-Za-z0-9,;.+\- ]{3,120})", text)
+        if not title_match:
+            continue
+        clean_title = normalize_whitespace(title_match.group(1))
         jobs.append(
             {
                 "id": f"google-{slugify(clean_title)}",
                 "company": "Google",
                 "title": clean_title,
                 "url": GOOGLE_RESULTS,
-                "location": normalize_whitespace(location),
+                "location": normalize_whitespace(location_match.group(1)) if location_match else "",
                 "remote": "unknown",
                 "employment_type": "full-time",
                 "posted_at": "",
-                "description": clean_title,
-                "skills": extract_skills_from_text(clean_title),
+                "description": text[:500],
+                "skills": extract_skills_from_text(text),
             }
         )
     return unique_jobs(jobs)
