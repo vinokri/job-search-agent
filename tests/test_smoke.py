@@ -177,6 +177,30 @@ MS Computer Science
             self.assertEqual(len(shortlist), 1)
             self.assertEqual(shortlist[0]["id"], "snowflake-001")
 
+    def test_new_search_replaces_active_session_jobs(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            paths = self.make_paths(tmp)
+            paths.profile.write_text((ROOT / "data/profile.json").read_text(encoding="utf-8"), encoding="utf-8")
+            paths.sample_jobs.write_text((ROOT / "data/jobs.sample.json").read_text(encoding="utf-8"), encoding="utf-8")
+            orchestrator = JobSearchOrchestrator(WorkflowStore(paths))
+
+            with patch(
+                "job_agent.orchestration.collect_live_jobs_with_diagnostics",
+                return_value=([], {}),
+            ):
+                orchestrator.run_search(["data engineer"], ["Snowflake"], 10)
+                first_runtime = json.loads(paths.runtime.read_text(encoding="utf-8"))
+                self.assertEqual(sorted(first_runtime["jobs"].keys()), ["snowflake-001"])
+
+                orchestrator.run_search(["software engineer"], ["Google"], 10)
+                second_runtime = json.loads(paths.runtime.read_text(encoding="utf-8"))
+                self.assertEqual(sorted(second_runtime["jobs"].keys()), ["google-001"])
+                self.assertNotEqual(
+                    first_runtime.get("current_session_id", ""),
+                    second_runtime.get("current_session_id", ""),
+                )
+
     def test_run_search_command_creates_shortlist_and_queue(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             tmp = Path(tmpdir)

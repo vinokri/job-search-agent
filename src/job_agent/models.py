@@ -21,3 +21,7 @@ def dump_json(path: str | Path, payload: Any) -> None:
 
 def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def session_id_now() -> str:
+    return datetime.now(timezone.utc).strftime("run-%Y%m%dT%H%M%S%fZ")

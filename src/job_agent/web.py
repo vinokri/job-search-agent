@@ -139,8 +139,12 @@ def render_home(message: str = "") -> bytes:
     memory_rows = "\n".join(render_memory_row(item) for item in memory[-8:][::-1]) or "<p class='empty'>No memory yet.</p>"
     banner = f"<div class='banner'>{html_escape(message)}</div>" if message else ""
     last_search = runtime.get("last_search", {}) if isinstance(runtime, dict) else {}
+    active_session_id = runtime.get("current_session_id", "") if isinstance(runtime, dict) else ""
     diagnostics = last_search.get("diagnostics", {}) if isinstance(last_search, dict) else {}
     diagnostics_rows = "\n".join(render_diagnostic_row(name, item) for name, item in diagnostics.items()) or "<p class='empty'>No diagnostics yet.</p>"
+    jobs_source_value = last_search.get("jobs_source", "unknown")
+    if jobs_source_value and jobs_source_value != "unknown":
+        jobs_source_value = display_path(Path(jobs_source_value))
 
     page = f"""<!doctype html>
 <html lang="en">
@@ -387,8 +391,9 @@ def render_home(message: str = "") -> bytes:
         <p class="muted">Agent memory: {html_escape(display_path(DEFAULT_MEMORY))}</p>
         <p class="muted">Structured resume: {html_escape(display_path(DEFAULT_RESUME_STRUCTURED))}</p>
         <p class="muted">Application runs: {html_escape(display_path(DEFAULT_APPLICATION_RUNS))}</p>
+        <p class="muted">Active session: {html_escape(active_session_id or 'none')}</p>
         <p class="muted">Last search companies: {html_escape(', '.join(last_search.get('companies', [])) or 'profile defaults')}</p>
-        <p class="muted">Last search source: {html_escape(last_search.get('jobs_source', 'unknown'))}</p>
+        <p class="muted">Last search source: {html_escape(jobs_source_value)}</p>
       </div>
     </section>
     <section class="grid">

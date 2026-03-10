@@ -5,7 +5,7 @@ from pathlib import Path
 
 from .ats import ApplicationRunStore, select_adapter
 from .collectors import collect_live_jobs_with_diagnostics
-from .models import dump_json, load_json, utc_now
+from .models import dump_json, load_json, session_id_now, utc_now
 from .resume import (
     load_structured_resume,
     ResumeRenderAgent,
@@ -58,7 +58,7 @@ class WorkflowStore:
 
     def load_runtime(self) -> dict:
         if not self.paths.runtime.exists():
-            return {"updated_at": "", "jobs": {}, "last_search": {}}
+            return {"updated_at": "", "current_session_id": "", "jobs": {}, "last_search": {}}
         return load_json(self.paths.runtime)
 
     def save_runtime(self, payload: dict) -> None:
@@ -98,6 +98,7 @@ class WorkflowStore:
 
 def default_job_state(item: dict) -> dict:
     return {
+        "session_id": "",
         "job_id": item["id"],
         "company": item["company"],
         "title": item["title"],
@@ -131,6 +132,7 @@ class SearchJobAgent:
         self.store = store
 
     def run(self, job_titles: list[str] | None, companies: list[str] | None, limit: int = 25) -> dict:
+        session_id = session_id_now()
         live_jobs, diagnostics = collect_live_jobs_with_diagnostics(
             str(self.store.paths.live_jobs),
             job_titles=job_titles,
@@ -149,13 +151,13 @@ class SearchJobAgent:
         )
 
         runtime = self.store.load_runtime()
-        existing_jobs = runtime.get("jobs", {})
         updated_jobs: dict[str, dict] = {}
         queue: list[dict] = []
         for item in shortlist:
-            current = existing_jobs.get(item["id"], default_job_state(item))
+            current = default_job_state(item)
             current.update(
                 {
+                    "session_id": session_id,
                     "job_id": item["id"],
                     "company": item["company"],
                     "title": item["title"],
@@ -170,6 +172,7 @@ class SearchJobAgent:
             queue.append(
                 {
                     "id": current["job_id"],
+                    "session_id": current["session_id"],
                     "company": current["company"],
                     "title": current["title"],
                     "url": current["url"],
@@ -191,11 +194,10 @@ class SearchJobAgent:
                     "last_agent": current["last_agent"],
                 }
             )
-
-        all_jobs = dict(existing_jobs)
-        all_jobs.update(updated_jobs)
-        runtime["jobs"] = all_jobs
+        runtime["current_session_id"] = session_id
+        runtime["jobs"] = updated_jobs
         runtime["last_search"] = {
+            "session_id": session_id,
             "timestamp": utc_now(),
             "job_titles": job_titles or [],
             "companies": companies or [],
@@ -206,10 +208,11 @@ class SearchJobAgent:
         }
         self.store.save_runtime(runtime)
         self.store.save_queue(queue)
+        self.store.save_approved([])
         self.store.append_memory(
             self.name,
             "search",
-            f"Collected {len(live_jobs)} live jobs and shortlisted {len(shortlist)} roles using {jobs_source.name}.",
+            f"Started {session_id}: collected {len(live_jobs)} live jobs and shortlisted {len(shortlist)} roles using {jobs_source.name}.",
             payload=runtime["last_search"],
         )
         return runtime["last_search"]
@@ -446,6 +449,7 @@ class JobSearchOrchestrator:
         self.store.save_queue([])
         self.store.save_approved([])
         runtime = self.store.load_runtime()
+        runtime["current_session_id"] = ""
         runtime["jobs"] = {}
         runtime["last_search"] = {}
         self.store.save_runtime(runtime)
