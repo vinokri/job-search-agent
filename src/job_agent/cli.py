@@ -4,6 +4,7 @@ import argparse
 
 from .queue import export_approved, seed_queue, update_status
 from .shortlist import build_shortlist
+from .web import serve_ui
 
 
 def limited_list(value: str, label: str, maximum: int) -> str:
@@ -86,6 +87,10 @@ def build_parser() -> argparse.ArgumentParser:
     export_parser.add_argument("--queue", required=True)
     export_parser.add_argument("--out", required=True)
 
+    serve_parser = subparsers.add_parser("serve-ui", help="Run the local web UI.")
+    serve_parser.add_argument("--host", default="127.0.0.1")
+    serve_parser.add_argument("--port", type=int, default=8000)
+
     return parser
 
 
@@ -126,6 +131,9 @@ def main() -> None:
         return
     if args.command == "export-approved":
         export_approved(args.queue, args.out)
+        return
+    if args.command == "serve-ui":
+        serve_ui(args.host, args.port)
         return
 
 

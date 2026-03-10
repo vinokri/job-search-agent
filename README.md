@@ -30,6 +30,8 @@ Current limitation:
 ├── README.md
 ├── pyproject.toml
 ├── .gitignore
+├── .dockerignore
+├── Dockerfile
 ├── data/
 │   ├── approved-jobs.json
 │   ├── jobs.sample.json
@@ -43,7 +45,8 @@ Current limitation:
 │   ├── cli.py
 │   ├── models.py
 │   ├── queue.py
-│   └── shortlist.py
+│   ├── shortlist.py
+│   └── web.py
 └── tests/
     └── test_smoke.py
 ```
@@ -59,6 +62,7 @@ Current limitation:
 7. Added CLI commands so the workflow is repeatable and easy to document.
 8. Added sample data and generated sample shortlist outputs.
 9. Added a smoke test to verify the main CLI flow.
+10. Added a dependency-free web UI and container deployment files.
 
 ## Workflow
 
@@ -162,12 +166,48 @@ python3 -m job_agent export-approved \
 
 At this point the automation stops. The approved list becomes the handoff point for later application preparation.
 
+## Local UI
+
+Run the browser UI:
+
+```bash
+cd "/Users/vinodhkrishnamoorthy/Documents/New project"
+PYTHONPATH=src python3 -m job_agent serve-ui --host 127.0.0.1 --port 8000
+```
+
+Then open [http://127.0.0.1:8000](http://127.0.0.1:8000).
+
+The UI supports:
+
+- running the search with up to 3 job titles and up to 5 company filters
+- viewing the ranked shortlist
+- approving, holding, or rejecting jobs from the review queue
+- exporting the approved jobs list
+
+## Deployment
+
+This repo now includes a simple `Dockerfile`, so it can be containerized and deployed on any service that accepts a container image.
+
+Build locally:
+
+```bash
+docker build -t job-search-agent .
+```
+
+Run locally with Docker:
+
+```bash
+docker run --rm -p 8000:8000 job-search-agent
+```
+
+The container starts the same UI at `http://127.0.0.1:8000`.
+
 ## Local development
 
 Run the smoke test:
 
 ```bash
-python3 -m unittest discover -s tests
+PYTHONPATH=src python3 -m unittest discover -s tests
 ```
 
 ## GitHub status

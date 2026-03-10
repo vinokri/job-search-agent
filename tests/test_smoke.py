@@ -1,13 +1,17 @@
 from __future__ import annotations
 
+import json
 import tempfile
 import unittest
+from io import BytesIO
 from pathlib import Path
 from unittest.mock import patch
 
 from job_agent.cli import main
 from job_agent.queue import export_approved, seed_queue, update_status
 from job_agent.shortlist import build_shortlist
+from job_agent import web
+from job_agent.web import application
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -90,6 +94,67 @@ class SmokeTest(unittest.TestCase):
             self.assertTrue(markdown_path.exists())
             queue = queue_path.read_text(encoding="utf-8")
             self.assertIn("snowflake-001", queue)
+
+    def test_web_app_home_and_run_search(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            profile_path = tmp / "profile.json"
+            jobs_path = tmp / "jobs.json"
+            shortlist_path = tmp / "shortlist.json"
+            queue_path = tmp / "queue.json"
+            approved_path = tmp / "approved.json"
+            markdown_path = tmp / "shortlist.md"
+
+            profile_path.write_text((ROOT / "data/profile.json").read_text(encoding="utf-8"), encoding="utf-8")
+            jobs_path.write_text((ROOT / "data/jobs.sample.json").read_text(encoding="utf-8"), encoding="utf-8")
+            approved_path.write_text("[]\n", encoding="utf-8")
+
+            statuses = []
+
+            def start_response(status, headers):  # noqa: ANN001,ANN202
+                statuses.append((status, headers))
+
+            with patch.object(web, "DEFAULT_PROFILE", profile_path), patch.object(
+                web, "DEFAULT_JOBS", jobs_path
+            ), patch.object(web, "DEFAULT_SHORTLIST", shortlist_path), patch.object(
+                web, "DEFAULT_QUEUE", queue_path
+            ), patch.object(
+                web, "DEFAULT_APPROVED", approved_path
+            ), patch.object(
+                web, "DEFAULT_MARKDOWN", markdown_path
+            ):
+                response = b"".join(
+                    application(
+                        {
+                            "REQUEST_METHOD": "GET",
+                            "PATH_INFO": "/",
+                            "QUERY_STRING": "",
+                            "wsgi.input": BytesIO(b""),
+                        },
+                        start_response,
+                    )
+                )
+                self.assertIn(b"Job Search Agent", response)
+                self.assertEqual(statuses[0][0], "200 OK")
+
+                body = b"job_title1=data+engineer&company1=Snowflake"
+                statuses.clear()
+                application(
+                    {
+                        "REQUEST_METHOD": "POST",
+                        "PATH_INFO": "/run-search",
+                        "CONTENT_LENGTH": str(len(body)),
+                        "QUERY_STRING": "",
+                        "wsgi.input": BytesIO(body),
+                    },
+                    start_response,
+                )
+                self.assertEqual(statuses[0][0], "303 See Other")
+                headers = dict(statuses[0][1])
+                self.assertIn("/?message=", headers["Location"])
+
+                queue_payload = json.loads(queue_path.read_text(encoding="utf-8"))
+                self.assertEqual(queue_payload[0]["id"], "snowflake-001")
 
 
 if __name__ == "__main__":
