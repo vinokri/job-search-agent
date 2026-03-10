@@ -1,0 +1,67 @@
+{
+  "candidate": {
+    "name": "Vinodh Krishnamoorthy",
+    "linkedin_url": "https://www.linkedin.com/in/vinodh-krishnamoorthy-4859a999/",
+    "resume_path": "/Users/vinodhkrishnamoorthy/Downloads/vinodh-krishnamoorthy-standard-resume (12) (1).pdf",
+    "headline": "Senior data and platform engineering candidate",
+    "summary": "Targeting software, data, machine learning, and platform engineering roles at leading cloud and AI companies.",
+    "locations": [
+      "California, USA"
+    ],
+    "work_authorization": [
+      "United States"
+    ],
+    "requires_sponsorship": false,
+    "seniority": "senior"
+  },
+  "preferences": {
+    "companies": [
+      "NVIDIA",
+      "Databricks",
+      "Snowflake",
+      "Google"
+    ],
+    "titles_include": [
+      "software engineer",
+      "data engineer",
+      "machine learning engineer",
+      "platform engineer"
+    ],
+    "titles_exclude": [
+      "intern",
+      "student",
+      "recruiter"
+    ],
+    "locations_preferred": [
+      "California",
+      "Remote"
+    ],
+    "employment_types": [
+      "full-time"
+    ],
+    "remote_preference": "any"
+  },
+  "skills": {
+    "must_have": [
+      "python",
+      "sql"
+    ],
+    "strong": [
+      "spark",
+      "distributed systems",
+      "machine learning",
+      "data pipelines"
+    ],
+    "nice_to_have": [
+      "kubernetes",
+      "aws",
+      "cloud"
+    ]
+  },
+  "experience": [],
+  "application_notes": {
+    "default_cover_note": "Interested in building high-impact data and AI products.",
+    "portfolio_url": "",
+    "github_url": ""
+  }
+}

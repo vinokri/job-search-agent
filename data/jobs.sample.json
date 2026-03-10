@@ -1,0 +1,54 @@
+[
+  {
+    "id": "nvidia-001",
+    "company": "NVIDIA",
+    "title": "Senior Software Engineer, ML Platform",
+    "url": "https://example.com/nvidia-001",
+    "location": "Santa Clara, CA, USA",
+    "remote": "hybrid",
+    "employment_type": "full-time",
+    "posted_at": "2026-03-09",
+    "description": "Build distributed machine learning and data platform systems using Python, SQL, cloud, and large-scale infrastructure.",
+    "skills": [
+      "python",
+      "sql",
+      "distributed systems",
+      "machine learning",
+      "cloud"
+    ]
+  },
+  {
+    "id": "google-001",
+    "company": "Google",
+    "title": "Software Engineer II, Core",
+    "url": "https://example.com/google-001",
+    "location": "Sunnyvale, CA, USA",
+    "remote": "onsite",
+    "employment_type": "full-time",
+    "posted_at": "2026-03-09",
+    "description": "Develop backend services and systems for large-scale products. Experience with distributed systems and engineering fundamentals required.",
+    "skills": [
+      "distributed systems",
+      "backend",
+      "python"
+    ]
+  },
+  {
+    "id": "snowflake-001",
+    "company": "Snowflake",
+    "title": "Data Engineer",
+    "url": "https://example.com/snowflake-001",
+    "location": "Remote, USA",
+    "remote": "remote",
+    "employment_type": "full-time",
+    "posted_at": "2026-03-08",
+    "description": "Design data pipelines and analytics workflows using Python, SQL, Spark, and cloud tooling.",
+    "skills": [
+      "python",
+      "sql",
+      "spark",
+      "data pipelines",
+      "aws"
+    ]
+  }
+]

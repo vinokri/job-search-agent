@@ -1,0 +1,4 @@
+interface:
+  display_name: "Job Hunt Apply"
+  short_description: "Shortlist and approve matched job applications"
+  default_prompt: "Use $job-hunt-apply to shortlist relevant jobs from target companies and prepare approved applications."

@@ -1,0 +1,18 @@
+[
+  {
+    "id": "company-job-id",
+    "company": "NVIDIA",
+    "title": "Senior Software Engineer",
+    "url": "https://example.com/job",
+    "location": "Santa Clara, CA, USA",
+    "remote": "hybrid",
+    "employment_type": "full-time",
+    "posted_at": "2026-03-09",
+    "description": "Paste the normalized job description here.",
+    "skills": [
+      "python",
+      "distributed systems",
+      "machine learning"
+    ]
+  }
+]

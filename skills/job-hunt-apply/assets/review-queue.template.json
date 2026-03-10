@@ -1,0 +1,12 @@
+[
+  {
+    "id": "company-job-id",
+    "company": "NVIDIA",
+    "title": "Senior Software Engineer",
+    "url": "https://example.com/job",
+    "score": 0,
+    "status": "pending",
+    "notes": "",
+    "reasons": []
+  }
+]

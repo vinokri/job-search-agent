@@ -1,0 +1,80 @@
+[
+  {
+    "id": "nvidia-001",
+    "company": "NVIDIA",
+    "title": "Senior Software Engineer, ML Platform",
+    "url": "https://example.com/nvidia-001",
+    "score": 68,
+    "reasons": [
+      "title matches preferred phrase 'software engineer'",
+      "company is in preferred list",
+      "employment type matches preference",
+      "seniority aligns with 'senior'",
+      "description overlaps with profile summary",
+      "matched skill 'python'",
+      "matched skill 'sql'",
+      "matched skill 'distributed systems'",
+      "matched skill 'machine learning'",
+      "matched skill 'cloud'"
+    ],
+    "matched_skills": [
+      "cloud",
+      "distributed systems",
+      "machine learning",
+      "python",
+      "sql"
+    ],
+    "missing_must_have": []
+  },
+  {
+    "id": "snowflake-001",
+    "company": "Snowflake",
+    "title": "Data Engineer",
+    "url": "https://example.com/snowflake-001",
+    "score": 60,
+    "reasons": [
+      "title matches preferred phrase 'data engineer'",
+      "company is in preferred list",
+      "employment type matches preference",
+      "description overlaps with profile summary",
+      "matched skill 'python'",
+      "matched skill 'sql'",
+      "matched skill 'spark'",
+      "matched skill 'data pipelines'",
+      "matched skill 'aws'",
+      "matched skill 'cloud'"
+    ],
+    "matched_skills": [
+      "aws",
+      "cloud",
+      "data pipelines",
+      "python",
+      "spark",
+      "sql"
+    ],
+    "missing_must_have": []
+  },
+  {
+    "id": "google-001",
+    "company": "Google",
+    "title": "Software Engineer II, Core",
+    "url": "https://example.com/google-001",
+    "score": 33,
+    "reasons": [
+      "title matches preferred phrase 'software engineer'",
+      "company is in preferred list",
+      "employment type matches preference",
+      "description overlaps with profile summary",
+      "matched skill 'python'",
+      "matched skill 'distributed systems'",
+      "missing must-have 'sql'"
+    ],
+    "matched_skills": [
+      "distributed systems",
+      "python"
+    ],
+    "missing_must_have": [
+      "sql"
+    ]
+  }
+]

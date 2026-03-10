@@ -1,0 +1,79 @@
+{
+  "candidate": {
+    "name": "Your Name",
+    "linkedin_url": "https://www.linkedin.com/in/your-profile",
+    "resume_path": "/absolute/path/to/resume.pdf",
+    "headline": "Senior data and platform engineer",
+    "summary": "Write a concise summary based on your LinkedIn profile.",
+    "locations": [
+      "California, USA"
+    ],
+    "work_authorization": [
+      "United States"
+    ],
+    "requires_sponsorship": false,
+    "seniority": "senior"
+  },
+  "preferences": {
+    "companies": [
+      "NVIDIA",
+      "Databricks",
+      "Snowflake",
+      "Google"
+    ],
+    "titles_include": [
+      "software engineer",
+      "data engineer",
+      "machine learning engineer",
+      "platform engineer"
+    ],
+    "titles_exclude": [
+      "intern",
+      "student",
+      "recruiter"
+    ],
+    "locations_preferred": [
+      "California, USA",
+      "Remote"
+    ],
+    "employment_types": [
+      "full-time"
+    ],
+    "remote_preference": "any"
+  },
+  "skills": {
+    "must_have": [
+      "python",
+      "sql"
+    ],
+    "strong": [
+      "spark",
+      "distributed systems",
+      "machine learning",
+      "data pipelines"
+    ],
+    "nice_to_have": [
+      "kubernetes",
+      "cloud",
+      "genai"
+    ]
+  },
+  "experience": [
+    {
+      "title": "Senior Data Engineer",
+      "company": "Example Corp",
+      "duration": "2021-2026",
+      "summary": "Built scalable data and ML platforms.",
+      "skills": [
+        "python",
+        "sql",
+        "spark"
+      ]
+    }
+  ],
+  "application_notes": {
+    "default_cover_note": "Interested in building high-impact data and AI products.",
+    "portfolio_url": "",
+    "github_url": ""
+  }
+}
