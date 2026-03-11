@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import os
+import tempfile
 from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -17,9 +19,11 @@ def load_json(path: str | Path, default: Any) -> Any:
 def dump_json(path: str | Path, payload: Any) -> None:
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    with open(path, "w", encoding="utf-8") as handle:
+    with tempfile.NamedTemporaryFile("w", encoding="utf-8", dir=path.parent, delete=False) as handle:
         json.dump(payload, handle, indent=2)
         handle.write("\n")
+        temp_name = handle.name
+    os.replace(temp_name, path)
 
 
 def utc_now() -> str:
@@ -44,3 +48,13 @@ def slugify(value: str) -> str:
     while "--" in cleaned:
         cleaned = cleaned.replace("--", "-")
     return cleaned.strip("-") or "item"
+
+
+def ensure_private_file(path: str | Path) -> None:
+    target = Path(path)
+    if not target.exists():
+        return
+    try:
+        os.chmod(target, 0o600)
+    except PermissionError:
+        return

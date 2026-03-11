@@ -5,6 +5,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from credit_card_dashboard.adapters import get_adapter
 from credit_card_dashboard.models import load_json
 from credit_card_dashboard.orchestration import DashboardOrchestrator, DashboardPaths, DashboardStore
 from credit_card_dashboard.vault import LocalSecretsVault
@@ -21,6 +22,7 @@ class DashboardSmokeTest(unittest.TestCase):
             statement_index=tmp / "statements" / "index.json",
             statement_files=tmp / "statements" / "files",
             secrets_vault=tmp / "secrets.vault",
+            secrets_metadata=tmp / "secrets.meta.json",
         )
 
     def test_refresh_and_payment_flow(self) -> None:
@@ -51,7 +53,7 @@ class DashboardSmokeTest(unittest.TestCase):
             request = orchestrator.create_payment("card-1", 125.50, "2026-03-12")
             self.assertEqual(request["status"], "pending_approval")
             approved = orchestrator.approve_payment(request["id"])
-            self.assertEqual(approved["status"], "approved_and_recorded")
+            self.assertEqual(approved["status"], "approved_missing_credentials")
 
     def test_statement_upload_updates_account(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -92,7 +94,7 @@ class DashboardSmokeTest(unittest.TestCase):
     def test_vault_masking(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             tmp = Path(tmpdir)
-            vault = LocalSecretsVault(tmp / "vault.enc")
+            vault = LocalSecretsVault(tmp / "vault.enc", tmp / "vault.meta.json")
             with patch.object(vault, "openssl_available", return_value=True), patch(
                 "subprocess.run"
             ) as run_mock:
@@ -103,6 +105,37 @@ class DashboardSmokeTest(unittest.TestCase):
                 masked = vault.set_credentials("card-1", "vinodh@example.com", "secret", "passphrase")
                 self.assertTrue(masked["credential_saved"])
                 self.assertIn("*", masked["masked_username"])
+                self.assertEqual(vault.masked_username("card-1"), masked["masked_username"])
+
+    def test_adapter_and_payment_lifecycle(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            paths = self.make_paths(tmp)
+            store = DashboardStore(paths)
+            store.save_accounts(
+                [
+                    {
+                        "id": "card-1",
+                        "issuer": "Chase",
+                        "nickname": "Sapphire",
+                        "last4": "1234",
+                        "credit_limit": 10000,
+                        "current_balance": 1500,
+                        "minimum_due": 50,
+                        "next_due_date": "2026-03-15",
+                        "autopay_enabled": False,
+                        "credential_saved": False,
+                        "masked_username": "",
+                    }
+                ]
+            )
+            orchestrator = DashboardOrchestrator(store)
+            request = orchestrator.create_payment("card-1", 222.0, "2026-03-12")
+            approved = orchestrator.approve_payment(request["id"])
+            self.assertEqual(approved["status"], "approved_missing_credentials")
+            completed = orchestrator.mark_payment_completed(request["id"], "manual-123")
+            self.assertEqual(completed["status"], "completed")
+            self.assertEqual(get_adapter("Chase").issuer_key, "chase")
 
 
 if __name__ == "__main__":
